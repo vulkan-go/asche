@@ -53,3 +53,44 @@ type SwapchainDimensions struct {
 	// Format is the pixel format of the swapchain.
 	Format vk.Format
 }
+
+type BaseVulkanApp struct {
+	context Context
+}
+
+func (app *BaseVulkanApp) Context() Context {
+	return app.context
+}
+
+func (app *BaseVulkanApp) VulkanInit(ctx Context) error {
+	app.context = ctx
+	return nil
+}
+
+func (app *BaseVulkanApp) VulkanAPIVersion() vk.Version {
+	return vk.MakeVersion(1, 0, 0)
+}
+
+func (app *BaseVulkanApp) VulkanAppVersion() vk.Version {
+	return vk.MakeVersion(1, 0, 0)
+}
+
+func (app *BaseVulkanApp) VulkanAppName() string {
+	return "base"
+}
+
+func (app *BaseVulkanApp) VulkanMode() VulkanMode {
+	return VulkanCompute | VulkanGraphics
+}
+
+func (app *BaseVulkanApp) VulkanSurface() vk.Surface {
+	return vk.NullSurface
+}
+
+func (app *BaseVulkanApp) VulkanInstanceExtensions() []string {
+	return nil
+}
+
+func (app *BaseVulkanApp) VulkanDeviceExtensions() []string {
+	return nil
+}
