@@ -68,11 +68,11 @@ func (app *BaseVulkanApp) VulkanInit(ctx Context) error {
 }
 
 func (app *BaseVulkanApp) VulkanAPIVersion() vk.Version {
-	return vk.MakeVersion(1, 0, 0)
+	return vk.Version(vk.MakeVersion(1, 0, 0))
 }
 
 func (app *BaseVulkanApp) VulkanAppVersion() vk.Version {
-	return vk.MakeVersion(1, 0, 0)
+	return vk.Version(vk.MakeVersion(1, 0, 0))
 }
 
 func (app *BaseVulkanApp) VulkanAppName() string {
