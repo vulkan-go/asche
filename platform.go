@@ -3,23 +3,28 @@ package asche
 import (
 	"errors"
 	"log"
+	"unsafe"
 
 	vk "github.com/vulkan-go/vulkan"
 )
 
 type Platform interface {
-	// MemoryProperties gets the current Vulkan GPU memory properties.
+	// MemoryProperties gets the current Vulkan physical device memory properties.
 	MemoryProperties() vk.PhysicalDeviceMemoryProperties
-	// GPUProperies gets the current Vulkan GPU properties.
-	GPUProperies() vk.PhysicalDeviceProperties
-	// GraphicsQueueIndex gets the current Vulkan graphics queue family index.
-	GraphicsQueueIndex() uint32
+	// PhysicalDeviceProperies gets the current Vulkan physical device properties.
+	PhysicalDeviceProperies() vk.PhysicalDeviceProperties
+	// GraphicsQueueFamilyIndex gets the current Vulkan graphics queue family index.
+	GraphicsQueueFamilyIndex() uint32
 	// Queue gets the current Vulkan graphics queue.
 	Queue() vk.Queue
 	// Instance gets the current Vulkan instance.
 	Instance() vk.Instance
 	// Device gets the current Vulkan device.
 	Device() vk.Device
+	// PhysicalDevice gets the current Vulkan physical device.
+	PhysicalDevice() vk.PhysicalDevice
+	// Surface gets the current Vulkan surface.
+	Surface() vk.Surface
 	// CurrentSwapchain gets the current swapchain. Returns imagess which application can render into,
 	// and the swapchain dimensions currently used.
 	CurrentSwapchain() ([]vk.Image, *SwapchainDimensions)
@@ -38,7 +43,7 @@ type Platform interface {
 }
 
 func NewPlatform(app Application) (pFace Platform, err error) {
-	defer checkErr(&err)
+	// defer checkErr(&err)
 	p := &platform{
 		basePlatform: basePlatform{
 			context: &context{},
@@ -54,6 +59,7 @@ func NewPlatform(app Application) (pFace Platform, err error) {
 	if missing > 0 {
 		log.Println("vulkan warning: missing", missing, "required instance extensions during init")
 	}
+	log.Printf("vulkan: enabling %d instance extensions", len(instanceExtensions))
 
 	// Select instance layers
 
@@ -69,8 +75,8 @@ func NewPlatform(app Application) (pFace Platform, err error) {
 	}
 
 	// Create instance
-
-	instanceInfo := &vk.InstanceCreateInfo{
+	var instance vk.Instance
+	ret := vk.CreateInstance(&vk.InstanceCreateInfo{
 		SType: vk.StructureTypeInstanceCreateInfo,
 		PApplicationInfo: &vk.ApplicationInfo{
 			SType:              vk.StructureTypeApplicationInfo,
@@ -81,21 +87,35 @@ func NewPlatform(app Application) (pFace Platform, err error) {
 		},
 		EnabledExtensionCount:   uint32(len(instanceExtensions)),
 		PpEnabledExtensionNames: instanceExtensions,
-	}
-	ret := vk.CreateInstance(instanceInfo, nil, &p.instance)
-	orPanic(newError(ret))
+		EnabledLayerCount:       uint32(len(validationLayers)),
+		PpEnabledLayerNames:     validationLayers,
+	}, nil, &instance)
+	orPanic(NewError(ret))
+	p.instance = instance
+	vk.InitInstance(instance)
 
-	// Find a suitalbe GPU
+	if app.VulkanDebug() {
+		// Register a debug callback
+		ret := vk.CreateDebugReportCallback(instance, &vk.DebugReportCallbackCreateInfo{
+			SType:       vk.StructureTypeDebugReportCallbackCreateInfo,
+			Flags:       vk.DebugReportFlags(vk.DebugReportErrorBit | vk.DebugReportWarningBit),
+			PfnCallback: dbgCallbackFunc,
+		}, nil, &p.debugCallback)
+		orPanic(NewError(ret))
+		log.Println("vulkan: DebugReportCallback enabled by application")
+	}
+
+	// Find a suitable GPU
 
 	var gpuCount uint32
 	ret = vk.EnumeratePhysicalDevices(p.instance, &gpuCount, nil)
-	orPanic(newError(ret))
+	orPanic(NewError(ret))
 	if gpuCount == 0 {
 		return nil, errors.New("vulkan error: no GPU devices found")
 	}
 	gpus := make([]vk.PhysicalDevice, gpuCount)
 	ret = vk.EnumeratePhysicalDevices(p.instance, &gpuCount, gpus)
-	orPanic(newError(ret))
+	orPanic(NewError(ret))
 	// get the first one, multiple GPUs not supported yet
 	p.gpu = gpus[0]
 	vk.GetPhysicalDeviceProperties(p.gpu, &p.gpuProperties)
@@ -112,6 +132,17 @@ func NewPlatform(app Application) (pFace Platform, err error) {
 	if missing > 0 {
 		log.Println("vulkan warning: missing", missing, "required device extensions during init")
 	}
+	log.Printf("vulkan: enabling %d device extensions", len(deviceExtensions))
+
+	// Make sure the surface is here if required
+
+	mode := app.VulkanMode()
+	if mode.Has(VulkanPresent) { // so, a surface is required and provided
+		p.surface = app.VulkanSurface(p.instance)
+		if p.surface == vk.NullSurface {
+			return nil, errors.New("vulkan error: surface required but not provided")
+		}
+	}
 
 	// Get queue family properties
 
@@ -126,7 +157,6 @@ func NewPlatform(app Application) (pFace Platform, err error) {
 	// Find a suitable queue family for the target Vulkan mode
 
 	var foundQueue bool
-	mode := app.VulkanMode()
 	for i := uint32(0); i < queueCount; i++ {
 		var (
 			required        vk.QueueFlags
@@ -141,7 +171,7 @@ func NewPlatform(app Application) (pFace Platform, err error) {
 		}
 		if mode.Has(VulkanPresent) {
 			needsPresent = true
-			vk.GetPhysicalDeviceSurfaceSupport(p.gpu, i, vk.NullSurface, &supportsPresent)
+			vk.GetPhysicalDeviceSurfaceSupport(p.gpu, i, p.surface, &supportsPresent)
 		}
 		p.queueProperties[i].Deref()
 		if p.queueProperties[i].QueueFlags&required == required {
@@ -159,6 +189,7 @@ func NewPlatform(app Application) (pFace Platform, err error) {
 
 	// Create a Vulkan device
 
+	var device vk.Device
 	ret = vk.CreateDevice(p.gpu, &vk.DeviceCreateInfo{
 		SType:                vk.StructureTypeDeviceCreateInfo,
 		QueueCreateInfoCount: 1,
@@ -174,18 +205,16 @@ func NewPlatform(app Application) (pFace Platform, err error) {
 		PpEnabledExtensionNames: deviceExtensions,
 		EnabledLayerCount:       uint32(len(validationLayers)),
 		PpEnabledLayerNames:     validationLayers,
-	}, nil, &p.device)
-	orPanic(newError(ret))
-	vk.GetDeviceQueue(p.device, p.graphicsQueueIndex, 0, &p.queue)
+	}, nil, &device)
+	orPanic(NewError(ret))
+	p.device = device
 
-	// Make sure the surface is here if required
+	var queue vk.Queue
+	vk.GetDeviceQueue(p.device, p.graphicsQueueIndex, 0, &queue)
+	p.queue = queue
 
-	if mode.Has(VulkanPresent) { // so, a surface is required and provided
-		p.surface = app.VulkanSurface()
-		if p.surface == vk.NullSurface {
-			return nil, errors.New("vulkan error: surface required but not provided")
-		}
-		dimensions := SwapchainDimensions{
+	if mode.Has(VulkanPresent) { // init a swapchain for surface
+		dimensions := &SwapchainDimensions{
 			// some default preferences here
 			Width: 640, Height: 480,
 			Format: vk.FormatB8g8r8a8Unorm,
@@ -193,7 +222,8 @@ func NewPlatform(app Application) (pFace Platform, err error) {
 		if iface, ok := app.(ApplicationSwapchainDimensions); ok {
 			dimensions = iface.VulkanSwapchainDimensions()
 		}
-		orPanic(p.initSwapchain(&dimensions))
+		p.swapchainDimensions, err = p.context.prepareSwapchain(dimensions)
+		orPanic(err)
 	}
 
 	// Finally, init the context and the application with platform state
@@ -227,11 +257,19 @@ func (p *basePlatform) MemoryProperties() vk.PhysicalDeviceMemoryProperties {
 	return p.memoryProperties
 }
 
-func (p *basePlatform) GPUProperies() vk.PhysicalDeviceProperties {
+func (p *basePlatform) PhysicalDeviceProperies() vk.PhysicalDeviceProperties {
 	return p.gpuProperties
 }
 
-func (p *basePlatform) GraphicsQueueIndex() uint32 {
+func (p *basePlatform) PhysicalDevice() vk.PhysicalDevice {
+	return p.gpu
+}
+
+func (p *basePlatform) Surface() vk.Surface {
+	return vk.NullHandle
+}
+
+func (p *basePlatform) GraphicsQueueFamilyIndex() uint32 {
 	return p.graphicsQueueIndex
 }
 
@@ -254,15 +292,17 @@ type platform struct {
 	swapchain           vk.Swapchain
 	swapchainDimensions *SwapchainDimensions
 	swapchainImages     []vk.Image
+	debugCallback       vk.DebugReportCallback
+}
+
+func (p *platform) Surface() vk.Surface {
+	return p.surface
 }
 
 func (p *platform) Destroy() {
-	// Don't release anything until the GPU is completely idle.
 	if p.device != nil {
 		vk.DeviceWaitIdle(p.device)
 	}
-	// Make sure we tear down the context before destroying the device since context
-	// also owns some Vulkan resources.
 	p.context.destroy()
 	p.context = nil
 	if p.swapchain != vk.NullSwapchain {
@@ -277,127 +317,13 @@ func (p *platform) Destroy() {
 		vk.DestroyDevice(p.device, nil)
 		p.device = nil
 	}
+	if p.debugCallback != vk.NullDebugReportCallback {
+		vk.DestroyDebugReportCallback(p.instance, p.debugCallback, nil)
+	}
 	if p.instance != nil {
 		vk.DestroyInstance(p.instance, nil)
 		p.instance = nil
 	}
-}
-
-func (p *platform) initSwapchain(dim *SwapchainDimensions) error {
-
-	// Read surface capabilities
-
-	var surfaceCapabilities vk.SurfaceCapabilities
-	ret := vk.GetPhysicalDeviceSurfaceCapabilities(p.gpu, p.surface, &surfaceCapabilities)
-	orPanic(newError(ret))
-	surfaceCapabilities.Deref()
-
-	// Get available surface pixel formats
-
-	var formatCount uint32
-	vk.GetPhysicalDeviceSurfaceFormats(p.gpu, p.surface, &formatCount, nil)
-	formats := make([]vk.SurfaceFormat, formatCount)
-	vk.GetPhysicalDeviceSurfaceFormats(p.gpu, p.surface, &formatCount, formats)
-
-	// Select a proper surface format
-
-	var format vk.SurfaceFormat
-	if formatCount == 1 {
-		formats[0].Deref()
-		if formats[0].Format == vk.FormatUndefined {
-			format = formats[0]
-			format.Format = dim.Format
-		} else {
-			format = formats[0]
-		}
-	} else if formatCount == 0 {
-		return errors.New("vulkan error: surface has no pixel formats")
-	} else {
-		formats[0].Deref()
-		// select the first one available
-		format = formats[0]
-	}
-
-	// Setup swapchain parameters
-
-	var swapchainSize vk.Extent2D
-	surfaceCapabilities.CurrentExtent.Deref()
-	if surfaceCapabilities.CurrentExtent.Width == vk.MaxUint32 {
-		swapchainSize.Width = dim.Width
-		swapchainSize.Height = dim.Height
-	} else {
-		swapchainSize = surfaceCapabilities.CurrentExtent
-	}
-	// FIFO must be supported by all implementations.
-	swapchainPresentMode := vk.PresentModeFifo
-	// Determine the number of VkImage's to use in the swapchain.
-	// Ideally, we desire to own 1 image at a time, the rest of the images can either be rendered to and/or
-	// being queued up for display.
-	desiredSwapchainImages := surfaceCapabilities.MinImageCount + 1
-	if surfaceCapabilities.MaxImageCount > 0 && desiredSwapchainImages > surfaceCapabilities.MaxImageCount {
-		// Application must settle for fewer images than desired.
-		desiredSwapchainImages = surfaceCapabilities.MaxImageCount
-	}
-
-	// Figure out a suitable surface transform.
-
-	var preTransform vk.SurfaceTransformFlagBits
-	requiredTransforms := vk.SurfaceTransformIdentityBit
-	supportedTransforms := vk.SurfaceTransformFlagBits(surfaceCapabilities.SupportedTransforms)
-	if supportedTransforms&requiredTransforms == requiredTransforms {
-		preTransform = requiredTransforms
-	} else {
-		preTransform = surfaceCapabilities.CurrentTransform
-	}
-
-	// Create a swapchain
-
-	oldSwapchain := p.swapchain
-	ret = vk.CreateSwapchain(p.device, &vk.SwapchainCreateInfo{
-		Surface:         p.surface,
-		MinImageCount:   desiredSwapchainImages,
-		ImageFormat:     format.Format,
-		ImageColorSpace: format.ColorSpace,
-		ImageExtent: vk.Extent2D{
-			Width:  swapchainSize.Width,
-			Height: swapchainSize.Height,
-		},
-		ImageArrayLayers: 1,
-		ImageUsage:       vk.ImageUsageFlags(vk.ImageUsageColorAttachmentBit),
-		ImageSharingMode: vk.SharingModeExclusive,
-		PreTransform:     preTransform,
-		CompositeAlpha:   vk.CompositeAlphaOpaqueBit,
-		PresentMode:      swapchainPresentMode,
-		Clipped:          vk.True,
-		OldSwapchain:     oldSwapchain,
-	}, nil, &p.swapchain)
-	orPanic(newError(ret))
-	if oldSwapchain != vk.NullSwapchain {
-		vk.DestroySwapchain(p.device, oldSwapchain, nil)
-	}
-
-	// Save properties and get swapchain images
-
-	p.swapchainDimensions.Width = swapchainSize.Width
-	p.swapchainDimensions.Height = swapchainSize.Height
-	p.swapchainDimensions.Format = format.Format
-
-	var imageCount uint32
-	ret = vk.GetSwapchainImages(p.device, p.swapchain, &imageCount, nil)
-	orPanic(newError(ret))
-	p.swapchainImages = make([]vk.Image, imageCount)
-	ret = vk.GetSwapchainImages(p.device, p.swapchain, &imageCount, p.swapchainImages)
-	orPanic(newError(ret))
-
-	return nil
-}
-
-func (p *platform) CurrentSwapchain() ([]vk.Image, *SwapchainDimensions) {
-	return p.swapchainImages, p.swapchainDimensions
-}
-
-func (p *platform) SwapchainImagesCount() uint32 {
-	return uint32(len(p.swapchainImages))
 }
 
 func (p *platform) AcquireNextImage() (imageIndex uint32, outdated bool, err error) {
@@ -409,7 +335,7 @@ func (p *platform) AcquireNextImage() (imageIndex uint32, outdated bool, err err
 		SType: vk.StructureTypeSemaphoreCreateInfo,
 	}
 	ret := vk.CreateSemaphore(p.device, semaphoreInfo, nil, &acquireSemaphore)
-	orPanic(newError(ret))
+	orPanic(NewError(ret))
 	// We will not need a semaphore since we will wait on host side for the fence to be set.
 	ret = vk.AcquireNextImage(p.device, p.swapchain, vk.MaxUint64,
 		acquireSemaphore, vk.NullFence, &imageIndex)
@@ -418,12 +344,12 @@ func (p *platform) AcquireNextImage() (imageIndex uint32, outdated bool, err err
 		vk.QueueWaitIdle(p.queue)
 		vk.DestroySemaphore(p.device, acquireSemaphore, nil)
 		// Recreate swapchain.
-		err = p.initSwapchain(p.swapchainDimensions)
+		p.swapchainDimensions, err = p.prepareSwapchain(p.swapchainDimensions)
 		outdated = true
 		return
 	case vk.Success:
 		ret = vk.CreateSemaphore(p.device, semaphoreInfo, nil, &releaseSemaphore)
-		orPanic(newError(ret), func() {
+		orPanic(NewError(ret), func() {
 			vk.QueueWaitIdle(p.queue)
 			vk.DestroySemaphore(p.device, acquireSemaphore, nil)
 		})
@@ -434,7 +360,7 @@ func (p *platform) AcquireNextImage() (imageIndex uint32, outdated bool, err err
 	default:
 		vk.QueueWaitIdle(p.queue)
 		vk.DestroySemaphore(p.device, acquireSemaphore, nil)
-		err = newError(ret)
+		err = NewError(ret)
 		return
 	}
 }
@@ -462,7 +388,28 @@ func (p *platform) PresentImage(idx uint32) (outdated bool, err error) {
 	case vk.Success:
 		return
 	default:
-		err = newError(ret)
+		err = NewError(ret)
 		return
 	}
+}
+
+func dbgCallbackFunc(flags vk.DebugReportFlags, objectType vk.DebugReportObjectType,
+	object uint64, location uint, messageCode int32, pLayerPrefix string,
+	pMessage string, pUserData unsafe.Pointer) vk.Bool32 {
+
+	switch {
+	case flags&vk.DebugReportFlags(vk.DebugReportInformationBit) != 0:
+		log.Printf("INFORMATION: [%s] Code %d : %s", pLayerPrefix, messageCode, pMessage)
+	case flags&vk.DebugReportFlags(vk.DebugReportWarningBit) != 0:
+		log.Printf("WARNING: [%s] Code %d : %s", pLayerPrefix, messageCode, pMessage)
+	case flags&vk.DebugReportFlags(vk.DebugReportPerformanceWarningBit) != 0:
+		log.Printf("PERFORMANCE WARNING: [%s] Code %d : %s", pLayerPrefix, messageCode, pMessage)
+	case flags&vk.DebugReportFlags(vk.DebugReportErrorBit) != 0:
+		log.Printf("ERROR: [%s] Code %d : %s", pLayerPrefix, messageCode, pMessage)
+	case flags&vk.DebugReportFlags(vk.DebugReportDebugBit) != 0:
+		log.Printf("DEBUG: [%s] Code %d : %s", pLayerPrefix, messageCode, pMessage)
+	default:
+		log.Printf("INFORMATION: [%s] Code %d : %s", pLayerPrefix, messageCode, pMsg)
+	}
+	return vk.Bool32(vk.False)
 }

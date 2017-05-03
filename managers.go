@@ -30,14 +30,14 @@ func (f *FenceManager) Reset() {
 func (f *FenceManager) NewFence() (vk.Fence, error) {
 	if f.count < uint32(len(f.fences)) {
 		f.count++
-		return f.fences[f.count], nil
+		return f.fences[f.count-1], nil
 	}
 	var fence vk.Fence
 	ret := vk.CreateFence(f.device, &vk.FenceCreateInfo{
 		SType: vk.StructureTypeFenceCreateInfo,
 	}, nil, &fence)
 	if isError(ret) {
-		return fence, newError(ret)
+		return fence, NewError(ret)
 	}
 	f.fences = append(f.fences, fence)
 	f.count++
@@ -82,7 +82,7 @@ func NewCommandBufferManager(device vk.Device,
 	}, nil, &pool)
 
 	if isError(ret) {
-		return nil, newError(ret)
+		return nil, NewError(ret)
 	}
 
 	m := &CommandBufferManager{
@@ -108,11 +108,11 @@ func (c *CommandBufferManager) Destroy() {
 func (c *CommandBufferManager) NewCommandBuffer() (vk.CommandBuffer, error) {
 	if c.count < uint32(len(c.buffers)) {
 		c.count++
-		buf := c.buffers[c.count]
+		buf := c.buffers[c.count-1]
 		ret := vk.ResetCommandBuffer(buf,
 			vk.CommandBufferResetFlags(vk.CommandBufferResetReleaseResourcesBit))
 		if isError(ret) {
-			return buf, newError(ret)
+			return buf, NewError(ret)
 		}
 		return buf, nil
 	}
@@ -123,7 +123,7 @@ func (c *CommandBufferManager) NewCommandBuffer() (vk.CommandBuffer, error) {
 		CommandPool:        c.pool,
 		Level:              c.commandBufferLevel,
 		CommandBufferCount: 1,
-	}, c.buffers[c.count:])
-	err := newError(ret)
-	return c.buffers[c.count], err
+	}, c.buffers[c.count-1:])
+	err := NewError(ret)
+	return c.buffers[c.count-1], err
 }

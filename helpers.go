@@ -8,21 +8,22 @@ import (
 	"strings"
 )
 
-var end = "\x00"
-var endChar byte = '\x00'
-
 func checkExisting(actual, required []string) (existing []string, missing int) {
 	existing = make([]string, 0, len(required))
-	for i := range actual {
-		for j := range required {
-			if required[j] == actual[i] {
-				existing = append(existing, required[j])
+	for j := range required {
+		req := safeString(required[j])
+		for i := range actual {
+			if safeString(actual[i]) == req {
+				existing = append(existing, req)
 			}
 		}
 	}
 	missing = len(required) - len(existing)
 	return existing, missing
 }
+
+var end = "\x00"
+var endChar byte = '\x00'
 
 func safeString(s string) string {
 	if len(s) == 0 {

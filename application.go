@@ -21,9 +21,10 @@ type Application interface {
 	VulkanAppVersion() vk.Version
 	VulkanAppName() string
 	VulkanMode() VulkanMode
-	VulkanSurface() vk.Surface
+	VulkanSurface(instance vk.Instance) vk.Surface
 	VulkanInstanceExtensions() []string
 	VulkanDeviceExtensions() []string
+	VulkanDebug() bool
 
 	// DECORATORS:
 	// ApplicationSwapchainDimensions
@@ -31,7 +32,7 @@ type Application interface {
 }
 
 type ApplicationSwapchainDimensions interface {
-	VulkanSwapchainDimensions() SwapchainDimensions
+	VulkanSwapchainDimensions() *SwapchainDimensions
 }
 
 type ApplicationVulkanLayers interface {
@@ -83,14 +84,18 @@ func (app *BaseVulkanApp) VulkanMode() VulkanMode {
 	return VulkanCompute | VulkanGraphics
 }
 
-func (app *BaseVulkanApp) VulkanSurface() vk.Surface {
+func (app *BaseVulkanApp) VulkanSurface(instance vk.Instance) vk.Surface {
 	return vk.NullSurface
 }
 
 func (app *BaseVulkanApp) VulkanInstanceExtensions() []string {
-	return nil
+	return vk.GetRequiredInstanceExtensions()
 }
 
 func (app *BaseVulkanApp) VulkanDeviceExtensions() []string {
 	return nil
+}
+
+func (app *BaseVulkanApp) VulkanDebug() bool {
+	return false
 }

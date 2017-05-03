@@ -13,10 +13,10 @@ func InstanceExtensions() (names []string, err error) {
 
 	var count uint32
 	ret := vk.EnumerateInstanceExtensionProperties("", &count, nil)
-	orPanic(newError(ret))
+	orPanic(NewError(ret))
 	list := make([]vk.ExtensionProperties, count)
 	ret = vk.EnumerateInstanceExtensionProperties("", &count, list)
-	orPanic(newError(ret))
+	orPanic(NewError(ret))
 	for _, ext := range list {
 		ext.Deref()
 		names = append(names, vk.ToString(ext.ExtensionName[:]))
@@ -30,10 +30,10 @@ func DeviceExtensions(gpu vk.PhysicalDevice) (names []string, err error) {
 
 	var count uint32
 	ret := vk.EnumerateDeviceExtensionProperties(gpu, "", &count, nil)
-	orPanic(newError(ret))
+	orPanic(NewError(ret))
 	list := make([]vk.ExtensionProperties, count)
 	ret = vk.EnumerateDeviceExtensionProperties(gpu, "", &count, list)
-	orPanic(newError(ret))
+	orPanic(NewError(ret))
 	for _, ext := range list {
 		ext.Deref()
 		names = append(names, vk.ToString(ext.ExtensionName[:]))
@@ -47,10 +47,10 @@ func ValidationLayers() (names []string, err error) {
 
 	var count uint32
 	ret := vk.EnumerateInstanceLayerProperties(&count, nil)
-	orPanic(newError(ret))
+	orPanic(NewError(ret))
 	list := make([]vk.LayerProperties, count)
 	ret = vk.EnumerateInstanceLayerProperties(&count, list)
-	orPanic(newError(ret))
+	orPanic(NewError(ret))
 	for _, layer := range list {
 		layer.Deref()
 		names = append(names, vk.ToString(layer.LayerName[:]))
@@ -148,7 +148,7 @@ func CreateBuffer(device vk.Device, memProps vk.PhysicalDeviceMemoryProperties,
 		Usage: vk.BufferUsageFlags(usage),
 		Size:  vk.DeviceSize(len(data)),
 	}, nil, &buffer)
-	orPanic(newError(ret))
+	orPanic(NewError(ret))
 
 	// Ask device about its memory requirements.
 
@@ -169,7 +169,7 @@ func CreateBuffer(device vk.Device, memProps vk.PhysicalDeviceMemoryProperties,
 		AllocationSize:  memReqs.Size,
 		MemoryTypeIndex: memType,
 	}, nil, &memory)
-	orPanic(newError(ret), func() {
+	orPanic(NewError(ret), func() {
 		vk.DestroyBuffer(device, buffer, nil)
 	})
 	vk.BindBufferMemory(device, buffer, memory, 0)
@@ -205,7 +205,7 @@ func LoadShaderModule(device vk.Device, data []byte) (vk.ShaderModule, error) {
 		PCode:    sliceUint32(data),
 	}, nil, &module)
 	if isError(ret) {
-		return vk.NullShaderModule, newError(ret)
+		return vk.NullShaderModule, NewError(ret)
 	}
 	return module, nil
 }
