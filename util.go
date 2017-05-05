@@ -58,37 +58,6 @@ func ValidationLayers() (names []string, err error) {
 	return names, err
 }
 
-func ImageMemoryBarrier(
-	cmd vk.CommandBuffer,
-	image vk.Image,
-	srcAccessMask vk.AccessFlagBits,
-	dstAccessMask vk.AccessFlagBits,
-	srcStageMask vk.PipelineStageFlagBits,
-	dstStageMask vk.PipelineStageFlagBits,
-	oldLayout vk.ImageLayout,
-	newLayout vk.ImageLayout,
-	aspect vk.ImageAspectFlagBits,
-) {
-	vk.CmdPipelineBarrier(cmd,
-		vk.PipelineStageFlags(srcStageMask),
-		vk.PipelineStageFlags(dstStageMask),
-		vk.False, 0, nil, 0, nil, 1, []vk.ImageMemoryBarrier{{
-			SType:               vk.StructureTypeImageMemoryBarrier,
-			SrcAccessMask:       vk.AccessFlags(srcAccessMask),
-			DstAccessMask:       vk.AccessFlags(dstAccessMask),
-			OldLayout:           oldLayout,
-			NewLayout:           newLayout,
-			SrcQueueFamilyIndex: vk.QueueFamilyIgnored,
-			DstQueueFamilyIndex: vk.QueueFamilyIgnored,
-			Image:               image,
-			SubresourceRange: vk.ImageSubresourceRange{
-				AspectMask: vk.ImageAspectFlags(aspect),
-				LevelCount: 1,
-				LayerCount: 1,
-			},
-		}})
-}
-
 func FindRequiredMemoryType(props vk.PhysicalDeviceMemoryProperties,
 	deviceRequirements, hostRequirements vk.MemoryPropertyFlagBits) (uint32, bool) {
 
@@ -96,7 +65,7 @@ func FindRequiredMemoryType(props vk.PhysicalDeviceMemoryProperties,
 		if deviceRequirements&(vk.MemoryPropertyFlagBits(1)<<i) != 0 {
 			props.MemoryTypes[i].Deref()
 			flags := props.MemoryTypes[i].PropertyFlags
-			if vk.MemoryPropertyFlagBits(flags)&hostRequirements == hostRequirements {
+			if flags&vk.MemoryPropertyFlags(hostRequirements) != 0 {
 				return i, true
 			}
 		}
@@ -111,7 +80,7 @@ func FindRequiredMemoryTypeFallback(props vk.PhysicalDeviceMemoryProperties,
 		if deviceRequirements&(vk.MemoryPropertyFlagBits(1)<<i) != 0 {
 			props.MemoryTypes[i].Deref()
 			flags := props.MemoryTypes[i].PropertyFlags
-			if vk.MemoryPropertyFlagBits(flags)&hostRequirements == hostRequirements {
+			if flags&vk.MemoryPropertyFlags(hostRequirements) != 0 {
 				return i, true
 			}
 		}
@@ -132,14 +101,14 @@ type Buffer struct {
 	Memory vk.DeviceMemory
 }
 
-func (b Buffer) Destroy() {
+func (b *Buffer) Destroy() {
 	vk.FreeMemory(b.device, b.Memory, nil)
 	vk.DestroyBuffer(b.device, b.Buffer, nil)
 	b.device = nil
 }
 
 func CreateBuffer(device vk.Device, memProps vk.PhysicalDeviceMemoryProperties,
-	data []byte, usage vk.BufferUsageFlagBits) Buffer {
+	data []byte, usage vk.BufferUsageFlagBits) *Buffer {
 
 	var buffer vk.Buffer
 	var memory vk.DeviceMemory
@@ -151,7 +120,6 @@ func CreateBuffer(device vk.Device, memProps vk.PhysicalDeviceMemoryProperties,
 	orPanic(NewError(ret))
 
 	// Ask device about its memory requirements.
-
 	var memReqs vk.MemoryRequirements
 	vk.GetBufferMemoryRequirements(device, buffer, &memReqs)
 	memReqs.Deref()
@@ -163,7 +131,6 @@ func CreateBuffer(device vk.Device, memProps vk.PhysicalDeviceMemoryProperties,
 	}
 
 	// Allocate device memory and bind to the buffer.
-
 	ret = vk.AllocateMemory(device, &vk.MemoryAllocateInfo{
 		SType:           vk.StructureTypeMemoryAllocateInfo,
 		AllocationSize:  memReqs.Size,
@@ -173,14 +140,13 @@ func CreateBuffer(device vk.Device, memProps vk.PhysicalDeviceMemoryProperties,
 		vk.DestroyBuffer(device, buffer, nil)
 	})
 	vk.BindBufferMemory(device, buffer, memory, 0)
-	b := Buffer{
+	b := &Buffer{
 		device: device,
 		Buffer: buffer,
 		Memory: memory,
 	}
 
 	// Map the memory and dump data in there.
-
 	if len(data) > 0 {
 		var pData unsafe.Pointer
 		ret := vk.MapMemory(device, memory, 0, vk.DeviceSize(len(data)), 0, &pData)

@@ -15,8 +15,14 @@ type Platform interface {
 	PhysicalDeviceProperies() vk.PhysicalDeviceProperties
 	// GraphicsQueueFamilyIndex gets the current Vulkan graphics queue family index.
 	GraphicsQueueFamilyIndex() uint32
-	// Queue gets the current Vulkan graphics queue.
-	Queue() vk.Queue
+	// PresentQueueFamilyIndex gets the current Vulkan present queue family index.
+	PresentQueueFamilyIndex() uint32
+	// HasSeparatePresentQueue is true when PresentQueueFamilyIndex differs from GraphicsQueueFamilyIndex.
+	HasSeparatePresentQueue() bool
+	// GraphicsQueue gets the current Vulkan graphics queue.
+	GraphicsQueue() vk.Queue
+	// PresentQueue gets the current Vulkan present queue.
+	PresentQueue() vk.Queue
 	// Instance gets the current Vulkan instance.
 	Instance() vk.Instance
 	// Device gets the current Vulkan device.
@@ -25,19 +31,6 @@ type Platform interface {
 	PhysicalDevice() vk.PhysicalDevice
 	// Surface gets the current Vulkan surface.
 	Surface() vk.Surface
-	// CurrentSwapchain gets the current swapchain. Returns imagess which application can render into,
-	// and the swapchain dimensions currently used.
-	CurrentSwapchain() ([]vk.Image, *SwapchainDimensions)
-	// SwapchainImagesCount gets number of swapchain images used.
-	SwapchainImagesCount() uint32
-	// AcquireNextImage at start of a frame acquires the next swapchain image to render into.
-	// Returns the acquired image index, along with error and an outdated marker
-	// that corresponds to vk.ErrorOutOfDate or vk.Suboptimal, user should update
-	// their swapchain with info from CurrentSwapchain method and call AcquireNextImage again.
-	AcquireNextImage() (imageIndex uint32, outdated bool, err error)
-	// PresentImage presents an image to the swapchain.
-	// imageIndex should be obtained from AcquireNextImage.
-	PresentImage(imageIndex uint32) (outdated bool, err error)
 	// Destroy is the destructor for the Platform instance.
 	Destroy()
 }
@@ -46,12 +39,16 @@ func NewPlatform(app Application) (pFace Platform, err error) {
 	// defer checkErr(&err)
 	p := &platform{
 		basePlatform: basePlatform{
-			context: &context{},
+			context: &context{
+				// TODO: make configurable
+				// defines count of slots allocated in swapchain
+				frameLag: 3,
+			},
 		},
 	}
+	p.context.platform = p
 
 	// Select instance extensions
-
 	requiredInstanceExtensions := safeStrings(app.VulkanInstanceExtensions())
 	actualInstanceExtensions, err := InstanceExtensions()
 	orPanic(err)
@@ -62,7 +59,6 @@ func NewPlatform(app Application) (pFace Platform, err error) {
 	log.Printf("vulkan: enabling %d instance extensions", len(instanceExtensions))
 
 	// Select instance layers
-
 	var validationLayers []string
 	if iface, ok := app.(ApplicationVulkanLayers); ok {
 		requiredValidationLayers := safeStrings(iface.VulkanLayers())
@@ -106,7 +102,6 @@ func NewPlatform(app Application) (pFace Platform, err error) {
 	}
 
 	// Find a suitable GPU
-
 	var gpuCount uint32
 	ret = vk.EnumeratePhysicalDevices(p.instance, &gpuCount, nil)
 	orPanic(NewError(ret))
@@ -124,7 +119,6 @@ func NewPlatform(app Application) (pFace Platform, err error) {
 	p.memoryProperties.Deref()
 
 	// Select device extensions
-
 	requiredDeviceExtensions := safeStrings(app.VulkanDeviceExtensions())
 	actualDeviceExtensions, err := DeviceExtensions(p.gpu)
 	orPanic(err)
@@ -135,7 +129,6 @@ func NewPlatform(app Application) (pFace Platform, err error) {
 	log.Printf("vulkan: enabling %d device extensions", len(deviceExtensions))
 
 	// Make sure the surface is here if required
-
 	mode := app.VulkanMode()
 	if mode.Has(VulkanPresent) { // so, a surface is required and provided
 		p.surface = app.VulkanSurface(p.instance)
@@ -145,24 +138,34 @@ func NewPlatform(app Application) (pFace Platform, err error) {
 	}
 
 	// Get queue family properties
-
 	var queueCount uint32
 	vk.GetPhysicalDeviceQueueFamilyProperties(p.gpu, &queueCount, nil)
-	p.queueProperties = make([]vk.QueueFamilyProperties, queueCount)
-	vk.GetPhysicalDeviceQueueFamilyProperties(p.gpu, &queueCount, p.queueProperties)
+	queueProperties := make([]vk.QueueFamilyProperties, queueCount)
+	vk.GetPhysicalDeviceQueueFamilyProperties(p.gpu, &queueCount, queueProperties)
 	if queueCount == 0 { // probably should try another GPU
 		return nil, errors.New("vulkan error: no queue families found on GPU 0")
 	}
 
 	// Find a suitable queue family for the target Vulkan mode
-
-	var foundQueue bool
+	var graphicsFound bool
+	var presentFound bool
+	var separateQueue bool
 	for i := uint32(0); i < queueCount; i++ {
 		var (
 			required        vk.QueueFlags
 			supportsPresent vk.Bool32
 			needsPresent    bool
 		)
+		if graphicsFound {
+			// looking for separate present queue
+			separateQueue = true
+			vk.GetPhysicalDeviceSurfaceSupport(p.gpu, i, p.surface, &supportsPresent)
+			if supportsPresent.B() {
+				p.presentQueueIndex = i
+				presentFound = true
+				break
+			}
+		}
 		if mode.Has(VulkanCompute) {
 			required |= vk.QueueFlags(vk.QueueComputeBit)
 		}
@@ -173,34 +176,50 @@ func NewPlatform(app Application) (pFace Platform, err error) {
 			needsPresent = true
 			vk.GetPhysicalDeviceSurfaceSupport(p.gpu, i, p.surface, &supportsPresent)
 		}
-		p.queueProperties[i].Deref()
-		if p.queueProperties[i].QueueFlags&required == required {
+		queueProperties[i].Deref()
+		if queueProperties[i].QueueFlags&required != 0 {
 			if !needsPresent || (needsPresent && supportsPresent.B()) {
 				p.graphicsQueueIndex = i
-				foundQueue = true
+				graphicsFound = true
 				break
+			} else if needsPresent {
+				p.graphicsQueueIndex = i
+				graphicsFound = true
+				// need present, but this one doesn't support
+				// continue lookup
 			}
 		}
 	}
-	if !foundQueue {
+	if separateQueue && !presentFound {
+		err := errors.New("vulkan error: could not found separate queue with present capabilities")
+		return nil, err
+	}
+	if !graphicsFound {
 		err := errors.New("vulkan error: could not find a suitable queue family for the target Vulkan mode")
 		return nil, err
 	}
 
 	// Create a Vulkan device
+	queueInfos := []vk.DeviceQueueCreateInfo{{
+		SType:            vk.StructureTypeDeviceQueueCreateInfo,
+		QueueFamilyIndex: p.graphicsQueueIndex,
+		QueueCount:       1,
+		PQueuePriorities: []float32{1.0},
+	}}
+	if separateQueue {
+		queueInfos = append(queueInfos, vk.DeviceQueueCreateInfo{
+			SType:            vk.StructureTypeDeviceQueueCreateInfo,
+			QueueFamilyIndex: p.presentQueueIndex,
+			QueueCount:       1,
+			PQueuePriorities: []float32{1.0},
+		})
+	}
 
 	var device vk.Device
 	ret = vk.CreateDevice(p.gpu, &vk.DeviceCreateInfo{
-		SType:                vk.StructureTypeDeviceCreateInfo,
-		QueueCreateInfoCount: 1,
-		PQueueCreateInfos: []vk.DeviceQueueCreateInfo{{
-			SType:            vk.StructureTypeDeviceQueueCreateInfo,
-			QueueFamilyIndex: p.graphicsQueueIndex,
-			QueueCount:       1,
-			PQueuePriorities: []float32{
-				1.0,
-			},
-		}},
+		SType:                   vk.StructureTypeDeviceCreateInfo,
+		QueueCreateInfoCount:    uint32(len(queueInfos)),
+		PQueueCreateInfos:       queueInfos,
 		EnabledExtensionCount:   uint32(len(deviceExtensions)),
 		PpEnabledExtensionNames: deviceExtensions,
 		EnabledLayerCount:       uint32(len(validationLayers)),
@@ -208,12 +227,21 @@ func NewPlatform(app Application) (pFace Platform, err error) {
 	}, nil, &device)
 	orPanic(NewError(ret))
 	p.device = device
+	p.context.device = device
+	app.VulkanInit(p.context)
 
 	var queue vk.Queue
 	vk.GetDeviceQueue(p.device, p.graphicsQueueIndex, 0, &queue)
-	p.queue = queue
+	p.graphicsQueue = queue
 
 	if mode.Has(VulkanPresent) { // init a swapchain for surface
+		if separateQueue {
+			var presentQueue vk.Queue
+			vk.GetDeviceQueue(p.device, p.presentQueueIndex, 0, &presentQueue)
+			p.presentQueue = presentQueue
+		}
+		p.context.preparePresent()
+
 		dimensions := &SwapchainDimensions{
 			// some default preferences here
 			Width: 640, Height: 480,
@@ -222,35 +250,37 @@ func NewPlatform(app Application) (pFace Platform, err error) {
 		if iface, ok := app.(ApplicationSwapchainDimensions); ok {
 			dimensions = iface.VulkanSwapchainDimensions()
 		}
-		p.swapchainDimensions, err = p.context.prepareSwapchain(dimensions)
-		orPanic(err)
+		p.context.prepareSwapchain(p.gpu, p.surface, dimensions)
 	}
-
-	// Finally, init the context and the application with platform state
-
-	orPanic(p.context.OnPlatformUpdate(p))
-	return p, app.VulkanInit(p.context)
+	if iface, ok := app.(ApplicationContextPrepare); ok {
+		p.context.SetOnPrepare(iface.VulkanContextPrepare)
+	}
+	if iface, ok := app.(ApplicationContextCleanup); ok {
+		p.context.SetOnCleanup(iface.VulkanContextCleanup)
+	}
+	if iface, ok := app.(ApplicationContextInvalidate); ok {
+		p.context.SetOnInvalidate(iface.VulkanContextInvalidate)
+	}
+	if mode.Has(VulkanPresent) {
+		p.context.prepare(false)
+	}
+	return p, nil
 }
 
 type basePlatform struct {
 	context *context
 
-	// The vulkan instance.
 	instance vk.Instance
-	// The vulkan physical device.
-	gpu vk.PhysicalDevice
-	// The vulkan device.
-	device vk.Device
-	// The vulkan device queue.
-	queue vk.Queue
-	// The vulkan physical device properties.
-	gpuProperties vk.PhysicalDeviceProperties
-	// The vulkan physical device memory properties.
-	memoryProperties vk.PhysicalDeviceMemoryProperties
-	// The vulkan physical device queue properties.
-	queueProperties []vk.QueueFamilyProperties
-	// The queue family index where graphics work will be submitted.
+	gpu      vk.PhysicalDevice
+	device   vk.Device
+
 	graphicsQueueIndex uint32
+	presentQueueIndex  uint32
+	presentQueue       vk.Queue
+	graphicsQueue      vk.Queue
+
+	gpuProperties    vk.PhysicalDeviceProperties
+	memoryProperties vk.PhysicalDeviceMemoryProperties
 }
 
 func (p *basePlatform) MemoryProperties() vk.PhysicalDeviceMemoryProperties {
@@ -266,15 +296,30 @@ func (p *basePlatform) PhysicalDevice() vk.PhysicalDevice {
 }
 
 func (p *basePlatform) Surface() vk.Surface {
-	return vk.NullHandle
+	return vk.NullSurface
 }
 
 func (p *basePlatform) GraphicsQueueFamilyIndex() uint32 {
 	return p.graphicsQueueIndex
 }
 
-func (p *basePlatform) Queue() vk.Queue {
-	return p.queue
+func (p *basePlatform) PresentQueueFamilyIndex() uint32 {
+	return p.presentQueueIndex
+}
+
+func (p *basePlatform) HasSeparatePresentQueue() bool {
+	return p.presentQueueIndex != p.graphicsQueueIndex
+}
+
+func (p *basePlatform) GraphicsQueue() vk.Queue {
+	return p.graphicsQueue
+}
+
+func (p *basePlatform) PresentQueue() vk.Queue {
+	if p.graphicsQueueIndex != p.presentQueueIndex {
+		return p.presentQueue
+	}
+	return p.graphicsQueue
 }
 
 func (p *basePlatform) Instance() vk.Instance {
@@ -288,11 +333,8 @@ func (p *basePlatform) Device() vk.Device {
 type platform struct {
 	basePlatform
 
-	surface             vk.Surface
-	swapchain           vk.Swapchain
-	swapchainDimensions *SwapchainDimensions
-	swapchainImages     []vk.Image
-	debugCallback       vk.DebugReportCallback
+	surface       vk.Surface
+	debugCallback vk.DebugReportCallback
 }
 
 func (p *platform) Surface() vk.Surface {
@@ -305,10 +347,6 @@ func (p *platform) Destroy() {
 	}
 	p.context.destroy()
 	p.context = nil
-	if p.swapchain != vk.NullSwapchain {
-		vk.DestroySwapchain(p.device, p.swapchain, nil)
-		p.swapchain = vk.NullSwapchain
-	}
 	if p.surface != vk.NullSurface {
 		vk.DestroySurface(p.instance, p.surface, nil)
 		p.surface = vk.NullSurface
@@ -323,73 +361,6 @@ func (p *platform) Destroy() {
 	if p.instance != nil {
 		vk.DestroyInstance(p.instance, nil)
 		p.instance = nil
-	}
-}
-
-func (p *platform) AcquireNextImage() (imageIndex uint32, outdated bool, err error) {
-	defer checkErr(&err)
-
-	var acquireSemaphore vk.Semaphore
-	var releaseSemaphore vk.Semaphore
-	semaphoreInfo := &vk.SemaphoreCreateInfo{
-		SType: vk.StructureTypeSemaphoreCreateInfo,
-	}
-	ret := vk.CreateSemaphore(p.device, semaphoreInfo, nil, &acquireSemaphore)
-	orPanic(NewError(ret))
-	// We will not need a semaphore since we will wait on host side for the fence to be set.
-	ret = vk.AcquireNextImage(p.device, p.swapchain, vk.MaxUint64,
-		acquireSemaphore, vk.NullFence, &imageIndex)
-	switch ret {
-	case vk.Suboptimal, vk.ErrorOutOfDate:
-		vk.QueueWaitIdle(p.queue)
-		vk.DestroySemaphore(p.device, acquireSemaphore, nil)
-		// Recreate swapchain.
-		p.swapchainDimensions, err = p.prepareSwapchain(p.swapchainDimensions)
-		outdated = true
-		return
-	case vk.Success:
-		ret = vk.CreateSemaphore(p.device, semaphoreInfo, nil, &releaseSemaphore)
-		orPanic(NewError(ret), func() {
-			vk.QueueWaitIdle(p.queue)
-			vk.DestroySemaphore(p.device, acquireSemaphore, nil)
-		})
-		// Signal the underlying context that we're using this backbuffer now.
-		// This will also wait for all fences associated with this swapchain image to complete first.
-		p.context.BeginFrame(imageIndex, acquireSemaphore, releaseSemaphore)
-		return
-	default:
-		vk.QueueWaitIdle(p.queue)
-		vk.DestroySemaphore(p.device, acquireSemaphore, nil)
-		err = NewError(ret)
-		return
-	}
-}
-
-func (p *platform) PresentImage(idx uint32) (outdated bool, err error) {
-	ret := vk.QueuePresent(p.queue,
-		&vk.PresentInfo{
-			SType: vk.StructureTypePresentInfo,
-			PImageIndices: []uint32{
-				idx,
-			},
-			SwapchainCount: 1,
-			PSwapchains: []vk.Swapchain{
-				p.swapchain,
-			},
-			WaitSemaphoreCount: 1,
-			PWaitSemaphores: []vk.Semaphore{
-				p.context.getSwapchainReleaseSemaphore(),
-			},
-		})
-	switch ret {
-	case vk.Suboptimal, vk.ErrorOutOfDate:
-		outdated = true
-		return
-	case vk.Success:
-		return
-	default:
-		err = NewError(ret)
-		return
 	}
 }
 
@@ -409,7 +380,7 @@ func dbgCallbackFunc(flags vk.DebugReportFlags, objectType vk.DebugReportObjectT
 	case flags&vk.DebugReportFlags(vk.DebugReportDebugBit) != 0:
 		log.Printf("DEBUG: [%s] Code %d : %s", pLayerPrefix, messageCode, pMessage)
 	default:
-		log.Printf("INFORMATION: [%s] Code %d : %s", pLayerPrefix, messageCode, pMsg)
+		log.Printf("INFORMATION: [%s] Code %d : %s", pLayerPrefix, messageCode, pMessage)
 	}
 	return vk.Bool32(vk.False)
 }

@@ -12,7 +12,7 @@ const (
 )
 
 func (v VulkanMode) Has(mode VulkanMode) bool {
-	return v&mode == mode
+	return v&mode != 0
 }
 
 type Application interface {
@@ -29,6 +29,9 @@ type Application interface {
 	// DECORATORS:
 	// ApplicationSwapchainDimensions
 	// ApplicationVulkanLayers
+	// ApplicationContextPrepare
+	// ApplicationContextCleanup
+	// ApplicationContextInvalidate
 }
 
 type ApplicationSwapchainDimensions interface {
@@ -37,6 +40,18 @@ type ApplicationSwapchainDimensions interface {
 
 type ApplicationVulkanLayers interface {
 	VulkanLayers() []string
+}
+
+type ApplicationContextPrepare interface {
+	VulkanContextPrepare() error
+}
+
+type ApplicationContextCleanup interface {
+	VulkanContextCleanup() error
+}
+
+type ApplicationContextInvalidate interface {
+	VulkanContextInvalidate(imageIdx int) error
 }
 
 var (
