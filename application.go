@@ -104,7 +104,7 @@ func (app *BaseVulkanApp) VulkanSurface(instance vk.Instance) vk.Surface {
 }
 
 func (app *BaseVulkanApp) VulkanInstanceExtensions() []string {
-	return vk.GetRequiredInstanceExtensions()
+	return nil
 }
 
 func (app *BaseVulkanApp) VulkanDeviceExtensions() []string {
