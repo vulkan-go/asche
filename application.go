@@ -96,7 +96,7 @@ func (app *BaseVulkanApp) VulkanAppName() string {
 }
 
 func (app *BaseVulkanApp) VulkanMode() VulkanMode {
-	return VulkanCompute | VulkanGraphics
+	return DefaultVulkanMode
 }
 
 func (app *BaseVulkanApp) VulkanSurface(instance vk.Instance) vk.Surface {
