@@ -1,12 +1,8 @@
-## Asche
+## dieselvk
 
-<img src="/docs/asche-logo.png" width="300" />
+dieselvk is a high-level framework created to simplify development of Vulkan API applications using Go programming language. It manages Vulkan platform state and initialization, also provides an interface the app must conform in order to tell about desired platform requirements.
 
-_...because when you throw a gopher into volcano you get a pile of ash._
-
-Asche is a high-level framework created to simplify development of Vulkan API applications using Go programming language. It manages Vulkan platform state and initialization, also provides an interface the app must conform in order to tell about desired platform requirements.
-
-Currently it's used in [VulkanCube](https://github.com/vulkan-go/demos/blob/master/vulkancube/vulkancube_android/main.go) demo app, please reference to it as an official Asche reference for now.
+fork of vulkan-go/asche
 
 You should start by implementing this platform-describing interface:
 
@@ -30,6 +26,7 @@ type Application interface {
     // ApplicationContextInvalidate
 }
 ```
+
 
 Usually the cross-platform code may inherit (by embedding) the default app `as.BaseVulkanApp`, and later you wrap your cross-platform code into platform-specific (as shown in Android and Desktop demos of cube) overriding method implementations for that interface. `VulkanInit()` may stay here from default app, as it doesn't do anything other than storing context state. `ApplicationContextPrepare()` can be overriden in cross-platform code as it must implement the application-specific logic. And finally the platform code overrides `VulkanSurface()` as it should acquire a valid `vk.Instance` using **platform-specific** `vk.CreateWindowSurface`.
 
