@@ -1,4 +1,4 @@
-package asche
+package dieselvk
 
 import vk "github.com/vulkan-go/vulkan"
 
