@@ -1,6 +1,3 @@
-//go:build !darwin
-// +build !darwin
-
 package dieselvk
 
 import (
@@ -75,6 +72,8 @@ func NewPlatform(app Application) (pFace Platform, err error) {
 
 	// Create instance
 	var instance vk.Instance
+	var flags vk.InstanceCreateFlags
+	flags = vk.InstanceCreateFlags(0x00000001) //VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT
 	ret := vk.CreateInstance(&vk.InstanceCreateInfo{
 		SType: vk.StructureTypeInstanceCreateInfo,
 		PApplicationInfo: &vk.ApplicationInfo{
@@ -88,6 +87,7 @@ func NewPlatform(app Application) (pFace Platform, err error) {
 		PpEnabledExtensionNames: instanceExtensions,
 		EnabledLayerCount:       uint32(len(validationLayers)),
 		PpEnabledLayerNames:     validationLayers,
+		Flags:                   flags,
 	}, nil, &instance)
 	orPanic(NewError(ret))
 	p.instance = instance
