@@ -1,0 +1,4 @@
+ERROR: 2022/10/18 20:33:23 core.go:136: Error creating instance with required extensions
+ERROR: 2022/10/18 20:34:14 core.go:136: Error creating instance with required extensions
+ERROR: 2022/10/18 20:34:35 core.go:136: Error creating instance with required extensions
+ERROR: 2022/10/18 20:36:15 core.go:136: Error creating instance with required extensions

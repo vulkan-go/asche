@@ -1,180 +1,13 @@
 package dieselvk
 
 import (
-	"log"
+	"bytes"
+	"fmt"
+	"io/ioutil"
+	"runtime"
+	"strings"
 	"unsafe"
-
-	vk "github.com/vulkan-go/vulkan"
 )
-
-// InstanceExtensions gets a list of instance extensions available on the platform.
-func InstanceExtensions() (names []string, err error) {
-	defer checkErr(&err)
-
-	var count uint32
-	ret := vk.EnumerateInstanceExtensionProperties("", &count, nil)
-	orPanic(NewError(ret))
-	list := make([]vk.ExtensionProperties, count)
-	ret = vk.EnumerateInstanceExtensionProperties("", &count, list)
-	orPanic(NewError(ret))
-	for _, ext := range list {
-		ext.Deref()
-		names = append(names, vk.ToString(ext.ExtensionName[:]))
-	}
-	return names, err
-}
-
-// DeviceExtensions gets a list of instance extensions available on the provided physical device.
-func DeviceExtensions(gpu vk.PhysicalDevice) (names []string, err error) {
-	defer checkErr(&err)
-
-	var count uint32
-	ret := vk.EnumerateDeviceExtensionProperties(gpu, "", &count, nil)
-	orPanic(NewError(ret))
-	list := make([]vk.ExtensionProperties, count)
-	ret = vk.EnumerateDeviceExtensionProperties(gpu, "", &count, list)
-	orPanic(NewError(ret))
-	for _, ext := range list {
-		ext.Deref()
-		names = append(names, vk.ToString(ext.ExtensionName[:]))
-	}
-	return names, err
-}
-
-// ValidationLayers gets a list of validation layers available on the platform.
-func ValidationLayers() (names []string, err error) {
-	defer checkErr(&err)
-
-	var count uint32
-	ret := vk.EnumerateInstanceLayerProperties(&count, nil)
-	orPanic(NewError(ret))
-	list := make([]vk.LayerProperties, count)
-	ret = vk.EnumerateInstanceLayerProperties(&count, list)
-	orPanic(NewError(ret))
-	for _, layer := range list {
-		layer.Deref()
-		names = append(names, vk.ToString(layer.LayerName[:]))
-	}
-	return names, err
-}
-
-func FindRequiredMemoryType(props vk.PhysicalDeviceMemoryProperties,
-	deviceRequirements, hostRequirements vk.MemoryPropertyFlagBits) (uint32, bool) {
-
-	for i := uint32(0); i < vk.MaxMemoryTypes; i++ {
-		if deviceRequirements&(vk.MemoryPropertyFlagBits(1)<<i) != 0 {
-			props.MemoryTypes[i].Deref()
-			flags := props.MemoryTypes[i].PropertyFlags
-			if flags&vk.MemoryPropertyFlags(hostRequirements) != 0 {
-				return i, true
-			}
-		}
-	}
-	return 0, false
-}
-
-func FindRequiredMemoryTypeFallback(props vk.PhysicalDeviceMemoryProperties,
-	deviceRequirements, hostRequirements vk.MemoryPropertyFlagBits) (uint32, bool) {
-
-	for i := uint32(0); i < vk.MaxMemoryTypes; i++ {
-		if deviceRequirements&(vk.MemoryPropertyFlagBits(1)<<i) != 0 {
-			props.MemoryTypes[i].Deref()
-			flags := props.MemoryTypes[i].PropertyFlags
-			if flags&vk.MemoryPropertyFlags(hostRequirements) != 0 {
-				return i, true
-			}
-		}
-	}
-	// Fallback to the first one available.
-	if hostRequirements != 0 {
-		return FindRequiredMemoryType(props, deviceRequirements, 0)
-	}
-	return 0, false
-}
-
-type Buffer struct {
-	// device for destroy purposes.
-	device vk.Device
-	// Buffer is the buffer object.
-	Buffer vk.Buffer
-	// Memory is the device memory backing buffer object.
-	Memory vk.DeviceMemory
-}
-
-func (b *Buffer) Destroy() {
-	vk.FreeMemory(b.device, b.Memory, nil)
-	vk.DestroyBuffer(b.device, b.Buffer, nil)
-	b.device = nil
-}
-
-func CreateBuffer(device vk.Device, memProps vk.PhysicalDeviceMemoryProperties,
-	data []byte, usage vk.BufferUsageFlagBits) *Buffer {
-
-	var buffer vk.Buffer
-	var memory vk.DeviceMemory
-	ret := vk.CreateBuffer(device, &vk.BufferCreateInfo{
-		SType: vk.StructureTypeBufferCreateInfo,
-		Usage: vk.BufferUsageFlags(usage),
-		Size:  vk.DeviceSize(len(data)),
-	}, nil, &buffer)
-	orPanic(NewError(ret))
-
-	// Ask device about its memory requirements.
-	var memReqs vk.MemoryRequirements
-	vk.GetBufferMemoryRequirements(device, buffer, &memReqs)
-	memReqs.Deref()
-
-	memType, ok := FindRequiredMemoryType(memProps, vk.MemoryPropertyFlagBits(memReqs.MemoryTypeBits),
-		vk.MemoryPropertyHostVisibleBit|vk.MemoryPropertyHostCoherentBit)
-	if !ok {
-		log.Println("vulkan warning: failed to find required memory type")
-	}
-
-	// Allocate device memory and bind to the buffer.
-	ret = vk.AllocateMemory(device, &vk.MemoryAllocateInfo{
-		SType:           vk.StructureTypeMemoryAllocateInfo,
-		AllocationSize:  memReqs.Size,
-		MemoryTypeIndex: memType,
-	}, nil, &memory)
-	orPanic(NewError(ret), func() {
-		vk.DestroyBuffer(device, buffer, nil)
-	})
-	vk.BindBufferMemory(device, buffer, memory, 0)
-	b := &Buffer{
-		device: device,
-		Buffer: buffer,
-		Memory: memory,
-	}
-
-	// Map the memory and dump data in there.
-	if len(data) > 0 {
-		var pData unsafe.Pointer
-		ret := vk.MapMemory(device, memory, 0, vk.DeviceSize(len(data)), 0, &pData)
-		if isError(ret) {
-			log.Printf("vulkan warning: failed to map device memory for data (len=%d)", len(data))
-			return b
-		}
-		n := vk.Memcopy(pData, data)
-		if n != len(data) {
-			log.Printf("vulkan warning: failed to copy data, %d != %d", n, len(data))
-		}
-		vk.UnmapMemory(device, memory)
-	}
-	return b
-}
-
-func LoadShaderModule(device vk.Device, data []byte) (vk.ShaderModule, error) {
-	var module vk.ShaderModule
-	ret := vk.CreateShaderModule(device, &vk.ShaderModuleCreateInfo{
-		SType:    vk.StructureTypeShaderModuleCreateInfo,
-		CodeSize: uint(len(data)),
-		PCode:    sliceUint32(data),
-	}, nil, &module)
-	if isError(ret) {
-		return vk.NullShaderModule, NewError(ret)
-	}
-	return module, nil
-}
 
 func sliceUint32(data []byte) []uint32 {
 	const m = 0x7fffffff
@@ -185,4 +18,126 @@ type sliceHeader struct {
 	Data uintptr
 	Len  int
 	Cap  int
+}
+
+func checkExisting(actual, required []string) (existing []string, missing int) {
+	existing = make([]string, 0, len(required))
+	for j := range required {
+		req := safeString(required[j])
+		for i := range actual {
+			if safeString(actual[i]) == req {
+				existing = append(existing, req)
+			}
+		}
+	}
+	missing = len(required) - len(existing)
+	return existing, missing
+}
+
+var end = "\x00"
+var endChar byte = '\x00'
+
+func safeString(s string) string {
+	if len(s) == 0 {
+		return end
+	}
+	if s[len(s)-1] != endChar {
+		return s + end
+	}
+	return s
+}
+
+func safeStrings(list []string) []string {
+	for i := range list {
+		list[i] = safeString(list[i])
+	}
+	return list
+}
+
+// A StackFrame contains all necessary information about to generate a line
+// in a callstack.
+type StackFrame struct {
+	File           string
+	LineNumber     int
+	Name           string
+	Package        string
+	ProgramCounter uintptr
+}
+
+// newStackFrame populates a stack frame object from the program counter.
+func newStackFrame(pc uintptr) (frame StackFrame) {
+
+	frame = StackFrame{ProgramCounter: pc}
+	if frame.Func() == nil {
+		return
+	}
+	frame.Package, frame.Name = packageAndName(frame.Func())
+
+	// pc -1 because the program counters we use are usually return addresses,
+	// and we want to show the line that corresponds to the function call
+	frame.File, frame.LineNumber = frame.Func().FileLine(pc - 1)
+	return
+
+}
+
+// Func returns the function that this stackframe corresponds to
+func (frame *StackFrame) Func() *runtime.Func {
+	if frame.ProgramCounter == 0 {
+		return nil
+	}
+	return runtime.FuncForPC(frame.ProgramCounter)
+}
+
+// String returns the stackframe formatted in the same way as go does
+// in runtime/debug.Stack()
+func (frame *StackFrame) String() string {
+	str := fmt.Sprintf("%s:%d (0x%x)\n", frame.File, frame.LineNumber, frame.ProgramCounter)
+
+	source, err := frame.SourceLine()
+	if err != nil {
+		return str
+	}
+
+	return str + fmt.Sprintf("\t%s: %s\n", frame.Name, source)
+}
+
+// SourceLine gets the line of code (from File and Line) of the original source if possible
+func (frame *StackFrame) SourceLine() (string, error) {
+	data, err := ioutil.ReadFile(frame.File)
+
+	if err != nil {
+		return "", err
+	}
+
+	lines := bytes.Split(data, []byte{'\n'})
+	if frame.LineNumber <= 0 || frame.LineNumber >= len(lines) {
+		return "???", nil
+	}
+	// -1 because line-numbers are 1 based, but our array is 0 based
+	return string(bytes.Trim(lines[frame.LineNumber-1], " \t")), nil
+}
+
+func packageAndName(fn *runtime.Func) (string, string) {
+	name := fn.Name()
+	pkg := ""
+
+	// The name includes the path name to the package, which is unnecessary
+	// since the file name is already included.  Plus, it has center dots.
+	// That is, we see
+	//  runtime/debug.*T·ptrmethod
+	// and want
+	//  *T.ptrmethod
+	// Since the package path might contains dots (e.g. code.google.com/...),
+	// we first remove the path prefix if there is one.
+	if lastslash := strings.LastIndex(name, "/"); lastslash >= 0 {
+		pkg += name[:lastslash] + "/"
+		name = name[lastslash+1:]
+	}
+	if period := strings.Index(name, "."); period >= 0 {
+		pkg += name[:period]
+		name = name[period+1:]
+	}
+
+	name = strings.Replace(name, "·", ".", -1)
+	return pkg, name
 }
