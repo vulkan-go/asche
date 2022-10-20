@@ -7,18 +7,16 @@ import (
 )
 
 type CoreRenderPass struct {
-	renderPass []vk.RenderPass
+	renderPass vk.RenderPass
 }
 
-func NewCoreRenderPass(passes int) *CoreRenderPass {
+func NewCoreRenderPass() *CoreRenderPass {
 	var core CoreRenderPass
-	core.renderPass = make([]vk.RenderPass, passes)
 	return &core
 }
 
 //Creates default renderpass with a color and depth attachment, depth attachment is generated from the display
 func (c *CoreRenderPass) CreateRenderPass(instance *CoreRenderInstance, display *CoreDisplay) {
-	c.renderPass = make([]vk.RenderPass, 1)
 
 	attachmentDescriptions := []vk.AttachmentDescription{
 		{
@@ -40,7 +38,7 @@ func (c *CoreRenderPass) CreateRenderPass(instance *CoreRenderInstance, display 
 			StencilLoadOp:  vk.AttachmentLoadOpDontCare,
 			StencilStoreOp: vk.AttachmentStoreOpDontCare,
 			InitialLayout:  vk.ImageLayoutUndefined,
-			FinalLayout:    vk.ImageLayoutPresentSrc},
+			FinalLayout:    vk.ImageLayoutDepthStencilAttachmentOptimal},
 	}
 
 	//Setup Subpass Attachment References
@@ -107,7 +105,7 @@ func (c *CoreRenderPass) CreateRenderPass(instance *CoreRenderInstance, display 
 		PSubpasses:      subpasses,
 		DependencyCount: uint32(len(subpass_dependencies)),
 		PDependencies:   subpass_dependencies,
-	}, nil, &c.renderPass[0])
+	}, nil, &c.renderPass)
 
 	if res != vk.Success {
 		Fatal(fmt.Errorf("Renderpass creation failed please enable vulkan layers for debugging\n"))

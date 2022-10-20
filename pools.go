@@ -7,7 +7,7 @@ import (
 )
 
 type CorePool struct {
-	pool *vk.CommandPool
+	pool vk.CommandPool
 }
 
 func NewCorePool(device *vk.Device, family_index uint32) (*CorePool, error) {
@@ -20,7 +20,7 @@ func NewCorePool(device *vk.Device, family_index uint32) (*CorePool, error) {
 		Flags:            vk.CommandPoolCreateFlags(vk.CommandPoolCreateFlagBits(0x00000002)), //  VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT = 0x00000002,
 	}, nil, &cmdPool)
 
-	core.pool = &cmdPool
+	core.pool = cmdPool
 
 	if ret != vk.Success {
 		return &core, fmt.Errorf("Error creating command pool")
@@ -31,5 +31,5 @@ func NewCorePool(device *vk.Device, family_index uint32) (*CorePool, error) {
 }
 
 func (c *CorePool) Destroy(device *vk.Device) {
-	vk.DestroyCommandPool(*device, *c.pool, nil)
+	vk.DestroyCommandPool(*device, c.pool, nil)
 }

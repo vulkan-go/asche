@@ -38,6 +38,7 @@ func (q *CoreQueue) GetCreateInfos() []vk.DeviceQueueCreateInfo {
 	priority := float32(0.5)
 	for index := 0; index < count; index++ {
 		infos[index] = vk.DeviceQueueCreateInfo{}
+		infos[index].SType = vk.StructureTypeDeviceQueueCreateInfo
 		infos[index].QueueFamilyIndex = uint32(index)
 		infos[index].PQueuePriorities = []float32{priority}
 		infos[index].QueueCount = 1
@@ -48,7 +49,9 @@ func (q *CoreQueue) GetCreateInfos() []vk.DeviceQueueCreateInfo {
 //Checks if device is suitable for queue operations
 func (q *CoreQueue) IsDeviceSuitable(flag_bits uint32) bool {
 	for index := 0; index < len(q.properties); index++ {
-		flag := q.properties[index].QueueFlags & vk.QueueFlags(flag_bits)
+		queue := q.properties[index]
+		queue.Deref()
+		flag := queue.QueueFlags & vk.QueueFlags(flag_bits)
 		if flag == vk.QueueFlags(flag_bits) {
 			return true
 		}
@@ -66,7 +69,9 @@ func (q *CoreQueue) CreateQueues(device vk.Device) {
 //Finds a suitable queue mode given flag bits does not check if the queue is already being used with an instance
 func (q *CoreQueue) FindSuitableQueue(flag_bits uint32) (bool, int) {
 	for index := 0; index < len(q.properties); index++ {
-		flag := q.properties[index].QueueFlags & vk.QueueFlags(flag_bits)
+		queue := q.properties[index]
+		queue.Deref()
+		flag := queue.QueueFlags & vk.QueueFlags(flag_bits)
 		if flag == vk.QueueFlags(flag_bits) {
 			return true, index
 		}
@@ -77,7 +82,9 @@ func (q *CoreQueue) FindSuitableQueue(flag_bits uint32) (bool, int) {
 //Finds a suitable queue mode given flag bits does not check if the queue is already being used with an instance
 func (q *CoreQueue) FindSuitableUnboundQueue(flag_bits uint32) (bool, int) {
 	for index := 0; index < len(q.properties); index++ {
-		flag := q.properties[index].QueueFlags & vk.QueueFlags(flag_bits)
+		queue := q.properties[index]
+		queue.Deref()
+		flag := queue.QueueFlags & vk.QueueFlags(flag_bits)
 		if flag == vk.QueueFlags(flag_bits) && !q.binded[index] {
 			return true, index
 		}
@@ -90,7 +97,9 @@ func (q *CoreQueue) FindSuitableUnboundQueue(flag_bits uint32) (bool, int) {
 func (q *CoreQueue) BindSuitableQueue(device vk.Device, flag_bits uint32, queue_instance uint32) (bool, *vk.Queue) {
 
 	for index := 0; index < len(q.properties); index++ {
-		flag := q.properties[index].QueueFlags & vk.QueueFlags(flag_bits)
+		queue := q.properties[index]
+		queue.Deref()
+		flag := queue.QueueFlags & vk.QueueFlags(flag_bits)
 		if flag == vk.QueueFlags(flag_bits) {
 			return true, &q.queues[index]
 		}
@@ -103,7 +112,9 @@ func (q *CoreQueue) BindSuitableQueue(device vk.Device, flag_bits uint32, queue_
 func (q *CoreQueue) BindSuitableUnboundQueue(device vk.Device, flag_bits uint32, queue_instance uint32) (bool, *vk.Queue) {
 
 	for index := 0; index < len(q.properties); index++ {
-		flag := q.properties[index].QueueFlags & vk.QueueFlags(flag_bits)
+		queue := q.properties[index]
+		queue.Deref()
+		flag := queue.QueueFlags & vk.QueueFlags(flag_bits)
 		if flag == vk.QueueFlags(flag_bits) && !q.binded[index] {
 			return true, &q.queues[index]
 		}
@@ -114,7 +125,9 @@ func (q *CoreQueue) BindSuitableUnboundQueue(device vk.Device, flag_bits uint32,
 //Function to gather graphics / present primary queue
 func (q *CoreQueue) BindGraphicsQueue(device vk.Device) (bool, *vk.Queue, int) {
 	for index := 0; index < len(q.properties); index++ {
-		flag := q.properties[index].QueueFlags & vk.QueueFlags(vk.QueueGraphicsBit)
+		queue := q.properties[index]
+		queue.Deref()
+		flag := queue.QueueFlags & vk.QueueFlags(vk.QueueGraphicsBit)
 		if flag == vk.QueueFlags(vk.QueueGraphicsBit) && !q.binded[index] {
 			return true, &q.queues[index], index
 		}

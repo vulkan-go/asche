@@ -1,7 +1,9 @@
 package dieselvk
 
 import (
+	"fmt"
 	"io/ioutil"
+	"os"
 
 	vk "github.com/vulkan-go/vulkan"
 )
@@ -35,15 +37,15 @@ func (core *CoreShader) CreateProgram(name string, instance *CoreRenderInstance,
 	for _, path := range paths {
 
 		path_id := core.shader_paths[path]
-		var bindingModule *vk.ShaderModule
-		core.LoadShaderModule(instance, path, bindingModule)
+		var bindingModule vk.ShaderModule
+		core.LoadShaderModule(instance, path, &bindingModule)
 
 		if path_id == VERTEX {
-			pg.vertex_shader_modules = bindingModule
+			pg.vertex_shader_modules = &bindingModule
 		}
 
 		if path_id == FRAG {
-			pg.fragment_shader_modules = bindingModule
+			pg.fragment_shader_modules = &bindingModule
 		}
 
 	}
@@ -76,7 +78,8 @@ func (core *CoreShader) LoadShaderModule(instance *CoreRenderInstance, path stri
 	res := vk.CreateShaderModule(instance.logical_device.handle, &module, nil, &shaderModule)
 
 	if res != vk.Success {
-		Fatal(NewError(res))
+		fmt.Printf("Error unable to create shader module in LoadShaderModule()\nExiting...")
+		os.Exit(1)
 	}
 
 	*out_shader = shaderModule

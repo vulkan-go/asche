@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/andewx/dieselvk/refactor"
+	"github.com/andewx/dieselvk"
 	"github.com/go-gl/glfw/v3.3/glfw"
 	vk "github.com/vulkan-go/vulkan"
 )
@@ -41,17 +41,17 @@ func TestRender(t *testing.T) {
 		panic(errW)
 	}
 
-	config := refactor.NewUsage("Vulkan", 5)
+	config := dieselvk.NewUsage("Vulkan", 5)
 	config.String_props["Display"] = "Window"
-	map_config := make(map[string]*refactor.Usage, 1)
+	map_config := make(map[string]*dieselvk.Usage, 1)
 	map_config["Config"] = config
 
-	vulkan_core := refactor.NewBaseCore(map_config, []string{"Render"}, "Vulkan App", 5, 5, window)
+	vulkan_core := dieselvk.NewBaseCore(map_config, []string{"Render"}, "Vulkan App", 5, 5, window)
 	vulkan_core.CreateGraphicsInstance("Render")
 	vk_instance := vulkan_core.GetInstance("Render")
 
 	for !window.ShouldClose() {
-		vk_instance.Render()
+		vk_instance.Update(0.0)
 		glfw.PollEvents()
 	}
 

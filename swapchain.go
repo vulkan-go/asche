@@ -9,11 +9,11 @@ import (
 type CoreSwapchain struct {
 	display       *CoreDisplay
 	depth         int
-	swapchain     *vk.Swapchain
+	swapchain     vk.Swapchain
 	framebuffers  []vk.Framebuffer
 	extent        vk.Extent2D
 	rect          vk.Rect2D
-	old_swapchain *vk.Swapchain
+	old_swapchain vk.Swapchain
 	images        []vk.Image
 	image_views   []vk.ImageView
 	viewport      vk.Viewport
@@ -29,17 +29,33 @@ func NewCoreSwapchain(instance *CoreRenderInstance, desired_depth int, display *
 	core.depth = desired_depth
 	surface := display.surface
 
-	var surfaceCapabilities vk.SurfaceCapabilities
-	ret := vk.GetPhysicalDeviceSurfaceCapabilities(instance.logical_device.selected_device, surface, &surfaceCapabilities)
-	surfaceCapabilities.Deref()
+	if surface == nil {
+		surfPtr, err := display.window.CreateWindowSurface(instance, nil)
+		if err != nil {
+			fmt.Printf("Error creating window surface object proceeding with vk.NullSurface\n")
+			display.surface = vk.NullSurface
+		}
+		display.surface = vk.SurfaceFromPointer(surfPtr)
+	}
+
+	return &core
+
+}
+
+func (core *CoreSwapchain) Init(instance *CoreRenderInstance, desired_depth int, display *CoreDisplay) {
+
+	var surface_capabilities vk.SurfaceCapabilities
+	ret := vk.GetPhysicalDeviceSurfaceCapabilities(instance.logical_device.selected_device, display.surface, &surface_capabilities)
+	surface_capabilities.Deref()
 
 	// Get available surface pixel formats
 	var formatCount uint32
-	vk.GetPhysicalDeviceSurfaceFormats(instance.logical_device.selected_device, surface, &formatCount, nil)
+	vk.GetPhysicalDeviceSurfaceFormats(instance.logical_device.selected_device, display.surface, &formatCount, nil)
 	formats := make([]vk.SurfaceFormat, formatCount)
-	vk.GetPhysicalDeviceSurfaceFormats(instance.logical_device.selected_device, surface, &formatCount, formats)
+	vk.GetPhysicalDeviceSurfaceFormats(instance.logical_device.selected_device, display.surface, &formatCount, formats)
 
 	//Select an available format or go with default sRGBA
+	// TODO: Select a desired format -- default to first available
 	var format vk.SurfaceFormat
 	if formatCount >= 1 {
 		formats[0].Deref()
@@ -69,49 +85,49 @@ func NewCoreSwapchain(instance *CoreRenderInstance, desired_depth int, display *
 	display.depth_format = depthFormats[1]
 
 	//Match swapchain extent to the surface capabilities
-	var swapchainSize vk.Extent2D
-	surfaceCapabilities.CurrentExtent.Deref()
-	if surfaceCapabilities.CurrentExtent.Width == vk.MaxUint32 {
+	var swapchain_size vk.Extent2D
+	surface_capabilities.CurrentExtent.Deref()
+	if surface_capabilities.CurrentExtent.Width == vk.MaxUint32 {
 		Fatal(fmt.Errorf("Surface capabilities return invalid frame width\n"))
 	} else {
-		swapchainSize = surfaceCapabilities.CurrentExtent
+		swapchain_size = surface_capabilities.CurrentExtent
 	}
 
 	//left, top, right, bottom := glfw.GetCurrentContext().GetFrameSize()
-	core.extent = swapchainSize
+	core.extent = swapchain_size
+	core.display.extent = core.extent
 
 	core.rect = vk.Rect2D{
 		Offset: vk.Offset2D{},
 		Extent: core.extent,
 	}
 
-	core.display.extent = core.extent
-
 	// The FIFO present mode is guaranteed by the spec to be supported
-	swapchainPresentMode := vk.PresentModeFifo
+	swapchain_present_mode := vk.PresentModeFifo
 
 	// Determine the number of VkImage's to use in the swapchain.
-	desiredSwapchainImages := uint32(desired_depth)
+	swap_image_count := uint32(desired_depth)
 
-	if surfaceCapabilities.MaxImageCount > 0 && desiredSwapchainImages > surfaceCapabilities.MaxImageCount {
-		desiredSwapchainImages = surfaceCapabilities.MaxImageCount
-	} else if desiredSwapchainImages < surfaceCapabilities.MinImageCount {
-		desiredSwapchainImages = surfaceCapabilities.MinImageCount
+	if surface_capabilities.MaxImageCount > 0 && swap_image_count > surface_capabilities.MaxImageCount {
+		swap_image_count = surface_capabilities.MaxImageCount
+	} else if swap_image_count < surface_capabilities.MinImageCount {
+		swap_image_count = surface_capabilities.MinImageCount
 	}
 
-	core.depth = int(desiredSwapchainImages)
+	core.depth = int(swap_image_count)
 	core.images = make([]vk.Image, core.depth)
 	core.image_views = make([]vk.ImageView, core.depth)
 	core.framebuffers = make([]vk.Framebuffer, core.depth) //framebuffers attach to the swapchain images and create additional depth buffers etc..
 
 	// Figure out a suitable surface transform.
-	var preTransform vk.SurfaceTransformFlagBits
-	requiredTransforms := vk.SurfaceTransformIdentityBit
-	supportedTransforms := surfaceCapabilities.SupportedTransforms
-	if vk.SurfaceTransformFlagBits(supportedTransforms)&requiredTransforms != 0 {
-		preTransform = requiredTransforms
+	var pre_transform vk.SurfaceTransformFlagBits
+	req_transform := vk.SurfaceTransformIdentityBit
+	support_transform := surface_capabilities.SupportedTransforms
+
+	if vk.SurfaceTransformFlagBits(support_transform)&req_transform != 0 {
+		pre_transform = req_transform
 	} else {
-		preTransform = surfaceCapabilities.CurrentTransform
+		pre_transform = surface_capabilities.CurrentTransform
 	}
 
 	// Find a supported composite alpha mode - one of these is guaranteed to be set
@@ -124,57 +140,55 @@ func NewCoreSwapchain(instance *CoreRenderInstance, desired_depth int, display *
 	}
 	for i := 0; i < len(compositeAlphaFlags); i++ {
 		alphaFlags := vk.CompositeAlphaFlags(compositeAlphaFlags[i])
-		flagSupported := surfaceCapabilities.SupportedCompositeAlpha&alphaFlags != 0
+		flagSupported := surface_capabilities.SupportedCompositeAlpha&alphaFlags != 0
 		if flagSupported {
 			compositeAlpha = compositeAlphaFlags[i]
 			break
 		}
 	}
 
-	// Create a swapchain
+	// Create Local Swapchain References
 	var swapchain vk.Swapchain
-	core.swapchain = &swapchain
 	core.old_swapchain = core.swapchain
+	core.swapchain = swapchain
 
 	ret = vk.CreateSwapchain(instance.logical_device.handle, &vk.SwapchainCreateInfo{
-		SType:           vk.StructureTypeSwapchainCreateInfo,
-		Surface:         surface,
-		MinImageCount:   uint32(core.depth),
-		ImageFormat:     format.Format,
-		ImageColorSpace: format.ColorSpace,
-		ImageExtent: vk.Extent2D{
-			Width:  core.rect.Extent.Width,
-			Height: core.rect.Extent.Height,
-		},
+		SType:            vk.StructureTypeSwapchainCreateInfo,
+		Surface:          display.surface,
+		MinImageCount:    uint32(core.depth),
+		ImageFormat:      format.Format,
+		ImageColorSpace:  format.ColorSpace,
+		ImageExtent:      core.display.extent,
 		ImageUsage:       vk.ImageUsageFlags(vk.ImageUsageColorAttachmentBit),
-		PreTransform:     preTransform,
+		PreTransform:     pre_transform,
 		CompositeAlpha:   compositeAlpha,
 		ImageArrayLayers: 1,
 		ImageSharingMode: vk.SharingModeExclusive,
-		PresentMode:      swapchainPresentMode,
-		OldSwapchain:     *core.old_swapchain,
+		PresentMode:      swapchain_present_mode,
+		OldSwapchain:     core.old_swapchain,
 		Clipped:          vk.True,
 	}, nil, &swapchain)
+
 	Fatal(NewError(ret))
 
-	if *core.old_swapchain != vk.NullSwapchain {
-		vk.DestroySwapchain(instance.logical_device.handle, *core.old_swapchain, nil)
+	if core.old_swapchain != vk.NullSwapchain {
+		vk.DestroySwapchain(instance.logical_device.handle, core.old_swapchain, nil)
 	}
 
-	core.swapchain = &swapchain
+	core.swapchain = swapchain
 
 	//Creates handles for the swapchain images
 	var imageCount uint32
-	ret = vk.GetSwapchainImages(instance.logical_device.handle, *core.swapchain, &imageCount, nil)
-	core.images = make([]vk.Image, desiredSwapchainImages)
-	ret = vk.GetSwapchainImages(instance.logical_device.handle, *core.swapchain, &imageCount, core.images)
+
+	ret = vk.GetSwapchainImages(instance.logical_device.handle, core.swapchain, &imageCount, nil)
+	core.images = make([]vk.Image, swap_image_count)
+	ret = vk.GetSwapchainImages(instance.logical_device.handle, core.swapchain, &imageCount, core.images)
 	core.image_views = make([]vk.ImageView, imageCount)
 
 	for index := uint32(0); index < imageCount; index++ {
 		core.CreateFrameImageView(int(index), instance, &core.images[index])
 	}
 
-	//Viewports
 	core.viewport = vk.Viewport{
 		X:        0.0,
 		Y:        1.0,
@@ -186,13 +200,13 @@ func NewCoreSwapchain(instance *CoreRenderInstance, desired_depth int, display *
 
 	core.display.viewport = core.viewport
 
-	return &core
 }
 
 func (core *CoreSwapchain) CreateFrameImageView(index int, instance *CoreRenderInstance, m_image_handle *vk.Image) {
 
 	var m_image_view vk.ImageView
 
+	//Color Format Image
 	vk.CreateImageView(instance.logical_device.handle,
 		&vk.ImageViewCreateInfo{
 			SType:    vk.StructureTypeImageViewCreateInfo,
@@ -216,7 +230,13 @@ func (core *CoreSwapchain) CreateFrameImageView(index int, instance *CoreRenderI
 
 }
 
-func (core *CoreSwapchain) CreateFrameBuffer(instance *CoreRenderInstance, renderpass *vk.RenderPass) {
+func (core *CoreSwapchain) Teardown_Framebuffers(instance *CoreRenderInstance) {
+	for index := 0; index < core.depth; index++ {
+		vk.DestroyFramebuffer(instance.logical_device.handle, core.framebuffers[index], nil)
+	}
+}
+
+func (core *CoreSwapchain) Create_FrameBuffers(instance *CoreRenderInstance, renderpass *vk.RenderPass) {
 
 	var depthImage vk.Image
 	queue_fam := []uint32{uint32(instance.render_queue_family)}
@@ -224,8 +244,8 @@ func (core *CoreSwapchain) CreateFrameBuffer(instance *CoreRenderInstance, rende
 		SType:                 vk.StructureTypeImageCreateInfo,
 		Flags:                 vk.ImageCreateFlags(vk.ImageCreateMutableFormatBit),
 		ImageType:             vk.ImageType2d,
-		Format:                core.display.surface_format.Format,
-		Extent:                vk.Extent3D{Width: core.extent.Width, Height: core.extent.Height, Depth: 1},
+		Format:                core.display.depth_format,
+		Extent:                vk.Extent3D{Width: core.display.extent.Width, Height: core.display.extent.Height, Depth: 1},
 		MipLevels:             1,
 		ArrayLayers:           1,
 		Samples:               vk.SampleCount1Bit,
@@ -273,7 +293,7 @@ func (core *CoreSwapchain) CreateFrameBuffer(instance *CoreRenderInstance, rende
 			Flags:    vk.ImageViewCreateFlags(0),
 			Image:    depthImage,
 			ViewType: vk.ImageViewType2d,
-			Format:   core.display.surface_format.Format,
+			Format:   core.display.depth_format,
 			Components: vk.ComponentMapping{
 				R: vk.ComponentSwizzleR,
 				G: vk.ComponentSwizzleG,

@@ -91,20 +91,20 @@ func NewBaseCore(usages map[string]*Usage, instances []string, app_name string, 
 		}
 	}
 
-	core.CreateGraphicsInstance("Render")
-
 	return &core
 }
 
 func (base *BaseCore) CreateGraphicsInstance(instance_name string) {
 
-	layers := base.GetValidationLayers()
-	devices := base.GetDeviceExtensions()
-	instance_extensions := base.GetInstanceExtensions()
-	required := base.display.window.GetRequiredInstanceExtensions()
+	//Get Core API Defined Wanted Layers and Extensions
+	api_validation := base.GetValidationLayers()
+	api_device := base.GetDeviceExtensions()
+	api_instance := base.GetInstanceExtensions()
+	api_required := base.display.window.GetRequiredInstanceExtensions()
 
-	inst_ext := NewBaseInstanceExtensions(instance_extensions, required)
-	layer_ext := NewBaseLayerExtensions(layers)
+	//Extension objects
+	inst_ext := NewBaseInstanceExtensions(api_instance, api_required)
+	layer_ext := NewBaseLayerExtensions(api_validation)
 
 	//Create instance
 	var instance vk.Instance
@@ -126,9 +126,9 @@ func (base *BaseCore) CreateGraphicsInstance(instance_name string) {
 			PEngineName:        base.name + "\x00",
 		},
 		EnabledExtensionCount:   uint32(len(inst_ext.GetExtensions())),
-		PpEnabledExtensionNames: inst_ext.GetExtensions(),
+		PpEnabledExtensionNames: safeStrings(inst_ext.GetExtensions()),
 		EnabledLayerCount:       uint32(len(layer_ext.GetExtensions())),
-		PpEnabledLayerNames:     layer_ext.GetExtensions(),
+		PpEnabledLayerNames:     safeStrings(layer_ext.GetExtensions()),
 		Flags:                   flags,
 	}, nil, &instance)
 
@@ -148,9 +148,11 @@ func (base *BaseCore) CreateGraphicsInstance(instance_name string) {
 		Fatal(derr)
 	}
 
+	//Create a golang map[string]int with Key: (path) Value: Shader Type Int for the CoreShader
 	shader_map[dirs+"/shaders/vert.spv"] = VERTEX
 	shader_map[dirs+"/shaders/frag.spv"] = FRAG
-	base.instances[instance_name], err = NewCoreRenderInstance(instance, "CoreRender", *layer_ext, devices, &base.display, NewCoreShader(shader_map, 1))
+	shader_core := NewCoreShader(shader_map, 1)
+	base.instances[instance_name], err = NewCoreRenderInstance(instance, "Render", *inst_ext, *layer_ext, api_device, &base.display, shader_core)
 
 	if err != nil {
 		base.error_log.Print(err)
@@ -165,16 +167,36 @@ func (base *BaseCore) GetInstance(name string) *CoreRenderInstance {
 func (base *BaseCore) GetValidationLayers() []string {
 	return []string{
 		//	"VK_LAYER_KHRONOS_profiles",
-		"VK_LAYER_KHRONOS_synchronization2",
+		//	"VK_LAYER_KHRONOS_synchronization2",
 		"VK_LAYER_KHRONOS_validation",
 		//"VK_LAYER_LUNARG_api_dump",
 	}
 }
 func (base *BaseCore) GetDeviceExtensions() []string {
-	return []string{"VK_KHR_swapchain", "VK_KHR_external_fence", "VK_KHR_portability_subset",
-		"VK_KHR_external_semaphore", "VK_KHR_metal_objects", "VK_KHR_device_group"}
+	return []string{"VK_KHR_swapchain", "VK_KHR_portability_subset", "VK_KHR_device_group"}
 }
 
 func (base *BaseCore) GetInstanceExtensions() []string {
-	return []string{}
+	var darwin_extensions []string
+	var other_extensions []string
+	core_extensions := []string{"VK_KHR_surface", "VK_KHR_device_group_creation"}
+	if PlatformOS == "Darwin" {
+		darwin_extensions = []string{"VK_MVK_macos_surface", "VK_EXT_metal_surface", "VK_KHR_portability_enumeration"}
+	}
+
+	if base.core_props["Config"] != nil {
+		if usage, ok := base.core_props["Config"].Bool_props["request_external_capabilities"]; ok == true {
+			if usage == true {
+				other_extensions = []string{"VK_KHR_external_fence_capabilities", "VK_KHR_external_semaphore_capabilities", "VK_KHR_external_memory_capabilities"}
+			}
+		}
+		if debug, ok := base.core_props["Config"].Bool_props["debug"]; ok == true {
+			if debug == true {
+				other_extensions = append(other_extensions, "VK_EXT_debug_report", "VK_EXT_debug_utils")
+			}
+		}
+
+	}
+	ext := append(darwin_extensions, other_extensions...)
+	return append(ext, core_extensions...)
 }

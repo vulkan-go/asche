@@ -7,16 +7,32 @@ import (
 )
 
 type CorePipeline struct {
-	layouts   map[string]*vk.PipelineLayout
-	pipelines map[string]*vk.Pipeline
+	layouts   map[string]vk.PipelineLayout
+	pipelines map[string]vk.Pipeline
 }
 
-func NewCorePipeline() *CorePipeline {
+func NewCorePipeline(instance *CoreRenderInstance) *CorePipeline {
 	var core CorePipeline
-	core.layouts = make(map[string]*vk.PipelineLayout, 4)
-	core.pipelines = make(map[string]*vk.Pipeline, 4)
-	core.layouts["Primary"] = &vk.NullPipelineLayout
-	core.pipelines["Primary"] = &vk.NullPipeline
+	core.layouts = make(map[string]vk.PipelineLayout, 4)
+	core.pipelines = make(map[string]vk.Pipeline, 4)
+
+	//Default pipline Layout Descriptor
+	layout := vk.PipelineLayoutCreateInfo{}
+	layout.SType = vk.StructureTypePipelineLayoutCreateInfo
+	layout.Flags = 0
+	layout.PNext = nil
+	layout.SetLayoutCount = 0
+	layout.PSetLayouts = nil
+	layout.PushConstantRangeCount = 0
+	layout.PPushConstantRanges = nil
+
+	//Core layout
+	core.layouts["default"] = vk.NullPipelineLayout
+	layouts := []vk.PipelineLayout{core.layouts["default"]}
+	vk.CreatePipelineLayout(instance.logical_device.handle, &layout, nil, &layouts[0])
+
+	core.layouts["default"] = layouts[0]
+	core.pipelines["default"] = vk.NullPipeline
 	return &core
 }
 
@@ -122,7 +138,7 @@ func NewPiplelineBuilder(instance *CoreRenderInstance, program *ShaderProgram) *
 
 }
 
-func (p *PipelineBuilder) BuildPipeline(instance *CoreRenderInstance, renderpass_id string, display *CoreDisplay, layout *vk.PipelineLayout) *vk.Pipeline {
+func (p *PipelineBuilder) BuildPipeline(instance *CoreRenderInstance, renderpass_id string, display *CoreDisplay, layout vk.PipelineLayout) vk.Pipeline {
 
 	viewports := []vk.Viewport{display.viewport}
 	scissors := []vk.Rect2D{{Offset: vk.Offset2D{}, Extent: display.extent}}
@@ -167,8 +183,8 @@ func (p *PipelineBuilder) BuildPipeline(instance *CoreRenderInstance, renderpass
 	pipeline_info.PMultisampleState = &p._multisampling
 	pipeline_info.PColorBlendState = &blend_state
 	pipeline_info.PDepthStencilState = &depth_state
-	pipeline_info.Layout = *layout
-	pipeline_info.RenderPass = instance.renderpasses[renderpass_id].renderPass[0]
+	pipeline_info.Layout = layout
+	pipeline_info.RenderPass = instance.renderpasses[renderpass_id].renderPass
 	pipeline_info.Subpass = 0
 	pipeline_info.BasePipelineHandle = nil
 
@@ -178,6 +194,6 @@ func (p *PipelineBuilder) BuildPipeline(instance *CoreRenderInstance, renderpass
 	if res != vk.Success {
 		Fatal(NewError(res))
 	}
-	return &pipelines[0]
+	return pipelines[0]
 
 }
