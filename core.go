@@ -18,7 +18,7 @@ type BaseCore struct {
 
 	//Core Implementation Context Properties
 	display    CoreDisplay
-	core_props map[string]*Usage
+	core_props map[string]string
 	name       string
 	info_log   *log.Logger
 	error_log  *log.Logger
@@ -48,7 +48,7 @@ type BaseCore struct {
 }
 
 //Instanitates a new core context allocation sizes, default allocation prevents buffer copies but is just used to instantiate map members
-func NewBaseCore(usages map[string]*Usage, instances []string, app_name string, map_allocate_size int, buffer_instance_allocate_size int, window *glfw.Window) *BaseCore {
+func NewBaseCore(config map[string]string, instance_name string, map_allocate_size int, buffer_instance_allocate_size int, window *glfw.Window) *BaseCore {
 	var core BaseCore
 
 	info_file, err := os.OpenFile("info_log.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0666)
@@ -66,13 +66,13 @@ func NewBaseCore(usages map[string]*Usage, instances []string, app_name string, 
 		log.Fatal(err)
 	}
 
-	core.core_props = usages
+	core.core_props = config
 	core.info_log = log.New(info_file, "INFO: ", log.Ldate|log.Ltime|log.Lshortfile)
 	core.error_log = log.New(error_file, "ERROR: ", log.Ldate|log.Ltime|log.Lshortfile)
 	core.warn_log = log.New(warn_file, "WARNING: ", log.Ldate|log.Ltime|log.Lshortfile)
 
-	core.instance_names = instances
-	core.name = app_name
+	core.instance_names = []string{instance_name}
+	core.name = instance_name
 
 	core.logical_devices = make(map[string]CoreDevice, map_allocate_size)
 	core.instances = make(map[string]*CoreRenderInstance, map_allocate_size)
@@ -85,13 +85,19 @@ func NewBaseCore(usages map[string]*Usage, instances []string, app_name string, 
 	core.attr_buffers = make(map[string]CoreBuffer, buffer_instance_allocate_size)
 	core.uniforms = make(map[string]int, buffer_instance_allocate_size)
 
-	if window != nil && usages["Config"].String_props["Display"] == "Window" {
+	if window != nil && core.core_props["display"] == "true" {
 		core.display = CoreDisplay{
 			window: window,
 		}
 	}
 
 	return &core
+}
+
+func (base *BaseCore) Release() {
+	for _, inst := range base.instances {
+		inst.release()
+	}
 }
 
 func (base *BaseCore) CreateGraphicsInstance(instance_name string) {
@@ -152,7 +158,7 @@ func (base *BaseCore) CreateGraphicsInstance(instance_name string) {
 	shader_map[dirs+"/shaders/vert.spv"] = VERTEX
 	shader_map[dirs+"/shaders/frag.spv"] = FRAG
 	shader_core := NewCoreShader(shader_map, 1)
-	base.instances[instance_name], err = NewCoreRenderInstance(instance, "Render", *inst_ext, *layer_ext, api_device, &base.display, shader_core)
+	base.instances[instance_name], err = NewCoreRenderInstance(instance, base.instance_names[0], *inst_ext, *layer_ext, api_device, &base.display, shader_core)
 
 	if err != nil {
 		base.error_log.Print(err)
@@ -184,18 +190,11 @@ func (base *BaseCore) GetInstanceExtensions() []string {
 		darwin_extensions = []string{"VK_MVK_macos_surface", "VK_EXT_metal_surface", "VK_KHR_portability_enumeration"}
 	}
 
-	if base.core_props["Config"] != nil {
-		if usage, ok := base.core_props["Config"].Bool_props["request_external_capabilities"]; ok == true {
-			if usage == true {
-				other_extensions = []string{"VK_KHR_external_fence_capabilities", "VK_KHR_external_semaphore_capabilities", "VK_KHR_external_memory_capabilities"}
-			}
-		}
-		if debug, ok := base.core_props["Config"].Bool_props["debug"]; ok == true {
-			if debug == true {
-				other_extensions = append(other_extensions, "VK_EXT_debug_report", "VK_EXT_debug_utils")
-			}
-		}
-
+	if usage := base.core_props["external"]; usage == "default" {
+		other_extensions = []string{"VK_KHR_external_fence_capabilities", "VK_KHR_external_semaphore_capabilities", "VK_KHR_external_memory_capabilities"}
+	}
+	if debug := base.core_props["debug"]; debug == "true" {
+		other_extensions = append(other_extensions, "VK_EXT_debug_report", "VK_EXT_debug_utils")
 	}
 	ext := append(darwin_extensions, other_extensions...)
 	return append(ext, core_extensions...)

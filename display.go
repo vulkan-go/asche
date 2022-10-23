@@ -10,7 +10,6 @@ import (
 type CoreDisplay struct {
 	window         *glfw.Window
 	extent         vk.Extent2D
-	viewport       vk.Viewport
 	surface_format vk.SurfaceFormat
 	depth_format   vk.Format
 	surface        vk.Surface
@@ -30,6 +29,9 @@ func (core *CoreDisplay) GetVulkanSurface(instance *vk.Instance) *vk.Surface {
 		Fatal(fmt.Errorf("Failed to create vulkan window surface\n"))
 	}
 	core.surface = vk.SurfaceFromPointer(ret)
-
 	return &core.surface
+}
+
+func (core *CoreDisplay) GetSize() (int, int) {
+	return core.window.GetSize()
 }

@@ -42,7 +42,7 @@ func NewCoreSwapchain(instance *CoreRenderInstance, desired_depth int, display *
 
 }
 
-func (core *CoreSwapchain) Init(instance *CoreRenderInstance, desired_depth int, display *CoreDisplay) {
+func (core *CoreSwapchain) init(instance *CoreRenderInstance, desired_depth int, display *CoreDisplay) {
 
 	var surface_capabilities vk.SurfaceCapabilities
 	ret := vk.GetPhysicalDeviceSurfaceCapabilities(instance.logical_device.selected_device, display.surface, &surface_capabilities)
@@ -95,15 +95,13 @@ func (core *CoreSwapchain) Init(instance *CoreRenderInstance, desired_depth int,
 
 	//left, top, right, bottom := glfw.GetCurrentContext().GetFrameSize()
 	core.extent = swapchain_size
+	core.extent.Deref()
 	core.display.extent = core.extent
 
 	core.rect = vk.Rect2D{
 		Offset: vk.Offset2D{},
 		Extent: core.extent,
 	}
-
-	// The FIFO present mode is guaranteed by the spec to be supported
-	swapchain_present_mode := vk.PresentModeFifo
 
 	// Determine the number of VkImage's to use in the swapchain.
 	swap_image_count := uint32(desired_depth)
@@ -115,9 +113,6 @@ func (core *CoreSwapchain) Init(instance *CoreRenderInstance, desired_depth int,
 	}
 
 	core.depth = int(swap_image_count)
-	core.images = make([]vk.Image, core.depth)
-	core.image_views = make([]vk.ImageView, core.depth)
-	core.framebuffers = make([]vk.Framebuffer, core.depth) //framebuffers attach to the swapchain images and create additional depth buffers etc..
 
 	// Figure out a suitable surface transform.
 	var pre_transform vk.SurfaceTransformFlagBits
@@ -149,8 +144,11 @@ func (core *CoreSwapchain) Init(instance *CoreRenderInstance, desired_depth int,
 
 	// Create Local Swapchain References
 	var swapchain vk.Swapchain
-	core.old_swapchain = core.swapchain
+	core.old_swapchain = vk.NullSwapchain
 	core.swapchain = swapchain
+
+	// The FIFO present mode is guaranteed by the spec to be supported
+	swapchain_present_mode := vk.PresentModeFifo
 
 	ret = vk.CreateSwapchain(instance.logical_device.handle, &vk.SwapchainCreateInfo{
 		SType:            vk.StructureTypeSwapchainCreateInfo,
@@ -158,7 +156,7 @@ func (core *CoreSwapchain) Init(instance *CoreRenderInstance, desired_depth int,
 		MinImageCount:    uint32(core.depth),
 		ImageFormat:      format.Format,
 		ImageColorSpace:  format.ColorSpace,
-		ImageExtent:      core.display.extent,
+		ImageExtent:      core.extent,
 		ImageUsage:       vk.ImageUsageFlags(vk.ImageUsageColorAttachmentBit),
 		PreTransform:     pre_transform,
 		CompositeAlpha:   compositeAlpha,
@@ -171,22 +169,19 @@ func (core *CoreSwapchain) Init(instance *CoreRenderInstance, desired_depth int,
 
 	Fatal(NewError(ret))
 
-	if core.old_swapchain != vk.NullSwapchain {
-		vk.DestroySwapchain(instance.logical_device.handle, core.old_swapchain, nil)
-	}
+	vk.DestroySwapchain(instance.logical_device.handle, core.old_swapchain, nil)
 
 	core.swapchain = swapchain
-
-	//Creates handles for the swapchain images
 	var imageCount uint32
 
 	ret = vk.GetSwapchainImages(instance.logical_device.handle, core.swapchain, &imageCount, nil)
-	core.images = make([]vk.Image, swap_image_count)
+	core.images = make([]vk.Image, imageCount)
 	ret = vk.GetSwapchainImages(instance.logical_device.handle, core.swapchain, &imageCount, core.images)
-	core.image_views = make([]vk.ImageView, imageCount)
+
+	core.image_views = make([]vk.ImageView, core.depth)
 
 	for index := uint32(0); index < imageCount; index++ {
-		core.CreateFrameImageView(int(index), instance, &core.images[index])
+		core.create_frame_image_view(int(index), instance, &core.images[index])
 	}
 
 	core.viewport = vk.Viewport{
@@ -197,12 +192,9 @@ func (core *CoreSwapchain) Init(instance *CoreRenderInstance, desired_depth int,
 		MinDepth: 0.0,
 		MaxDepth: 1.0,
 	}
-
-	core.display.viewport = core.viewport
-
 }
 
-func (core *CoreSwapchain) CreateFrameImageView(index int, instance *CoreRenderInstance, m_image_handle *vk.Image) {
+func (core *CoreSwapchain) create_frame_image_view(index int, instance *CoreRenderInstance, m_image_handle *vk.Image) {
 
 	var m_image_view vk.ImageView
 
@@ -230,13 +222,23 @@ func (core *CoreSwapchain) CreateFrameImageView(index int, instance *CoreRenderI
 
 }
 
-func (core *CoreSwapchain) Teardown_Framebuffers(instance *CoreRenderInstance) {
+func (core *CoreSwapchain) teardown_framebuffers(instance *CoreRenderInstance) {
+
+	vk.QueueWaitIdle(*instance.render_queue)
 	for index := 0; index < core.depth; index++ {
 		vk.DestroyFramebuffer(instance.logical_device.handle, core.framebuffers[index], nil)
 	}
+	core.framebuffers = make([]vk.Framebuffer, core.depth)
 }
 
-func (core *CoreSwapchain) Create_FrameBuffers(instance *CoreRenderInstance, renderpass *vk.RenderPass) {
+func (core *CoreSwapchain) create_framebuffers(instance *CoreRenderInstance, renderpass *vk.RenderPass) {
+
+	if len(core.framebuffers) > 0 {
+		for i := 0; i < len(core.framebuffers); i++ {
+			vk.DestroyFramebuffer(instance.logical_device.handle, core.framebuffers[i], nil)
+		}
+	}
+	core.framebuffers = make([]vk.Framebuffer, core.depth) //framebuffers attach to the swapchain images and create additional depth buffers etc..
 
 	var depthImage vk.Image
 	queue_fam := []uint32{uint32(instance.render_queue_family)}
@@ -245,7 +247,7 @@ func (core *CoreSwapchain) Create_FrameBuffers(instance *CoreRenderInstance, ren
 		Flags:                 vk.ImageCreateFlags(vk.ImageCreateMutableFormatBit),
 		ImageType:             vk.ImageType2d,
 		Format:                core.display.depth_format,
-		Extent:                vk.Extent3D{Width: core.display.extent.Width, Height: core.display.extent.Height, Depth: 1},
+		Extent:                vk.Extent3D{Width: core.extent.Width, Height: core.extent.Height, Depth: 1},
 		MipLevels:             1,
 		ArrayLayers:           1,
 		Samples:               vk.SampleCount1Bit,

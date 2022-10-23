@@ -9,6 +9,7 @@ import (
 type CorePipeline struct {
 	layouts   map[string]vk.PipelineLayout
 	pipelines map[string]vk.Pipeline
+	dynamic   []vk.DynamicState
 }
 
 func NewCorePipeline(instance *CoreRenderInstance) *CorePipeline {
@@ -25,6 +26,7 @@ func NewCorePipeline(instance *CoreRenderInstance) *CorePipeline {
 	layout.PSetLayouts = nil
 	layout.PushConstantRangeCount = 0
 	layout.PPushConstantRanges = nil
+	core.dynamic = make([]vk.DynamicState, 1)
 
 	//Core layout
 	core.layouts["default"] = vk.NullPipelineLayout
@@ -140,7 +142,10 @@ func NewPiplelineBuilder(instance *CoreRenderInstance, program *ShaderProgram) *
 
 func (p *PipelineBuilder) BuildPipeline(instance *CoreRenderInstance, renderpass_id string, display *CoreDisplay, layout vk.PipelineLayout) vk.Pipeline {
 
-	viewports := []vk.Viewport{display.viewport}
+	dynamic := make([]vk.DynamicState, 2)
+	dynamic[0] = vk.DynamicStateViewport
+	dynamic[1] = vk.DynamicStateScissor
+	viewports := []vk.Viewport{instance.swapchain.viewport}
 	scissors := []vk.Rect2D{{Offset: vk.Offset2D{}, Extent: display.extent}}
 
 	attachments := []vk.PipelineColorBlendAttachmentState{p._colorBlendAttachment}
@@ -170,6 +175,14 @@ func (p *PipelineBuilder) BuildPipeline(instance *CoreRenderInstance, renderpass
 	depth_state.Flags = vk.PipelineDepthStencilStateCreateFlags(0)
 	//Shaders stages
 
+	//Pipline Dynamic State
+
+	p_dynam := vk.PipelineDynamicStateCreateInfo{}
+	p_dynam.SType = vk.StructureTypePipelineDynamicStateCreateInfo
+	p_dynam.Flags = vk.PipelineDynamicStateCreateFlags(0)
+	p_dynam.DynamicStateCount = 2
+	p_dynam.PDynamicStates = dynamic
+
 	pipeline_info := vk.GraphicsPipelineCreateInfo{}
 	pipeline_info.SType = vk.StructureTypeGraphicsPipelineCreateInfo
 	pipeline_info.PNext = nil
@@ -177,7 +190,7 @@ func (p *PipelineBuilder) BuildPipeline(instance *CoreRenderInstance, renderpass
 	pipeline_info.PStages = p._shaderStages
 	pipeline_info.PVertexInputState = &p._vertexInputInfo
 	pipeline_info.PInputAssemblyState = &p._inputAssembly
-
+	pipeline_info.PDynamicState = &p_dynam
 	pipeline_info.PViewportState = &view_create
 	pipeline_info.PRasterizationState = &p._rasterizer
 	pipeline_info.PMultisampleState = &p._multisampling

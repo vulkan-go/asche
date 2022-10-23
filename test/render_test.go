@@ -21,6 +21,7 @@ func TestRender(t *testing.T) {
 	if err := glfw.Init(); err != nil {
 		panic(err)
 	}
+
 	defer glfw.Terminate()
 
 	glfw.WindowHint(glfw.Resizable, glfw.True)
@@ -41,18 +42,21 @@ func TestRender(t *testing.T) {
 		panic(errW)
 	}
 
-	config := dieselvk.NewUsage("Vulkan", 5)
-	config.String_props["Display"] = "Window"
-	map_config := make(map[string]*dieselvk.Usage, 1)
-	map_config["Config"] = config
+	//Api currently checks some config key/value pairs for creating the render instance and loading in extensions
+	config := make(map[string]string, 10)
+	config["extensions"] = "default"
+	config["display"] = "true"
+	config["debug"] = "false"
 
-	vulkan_core := dieselvk.NewBaseCore(map_config, []string{"Render"}, "Vulkan App", 5, 5, window)
-	vulkan_core.CreateGraphicsInstance("Render")
-	vk_instance := vulkan_core.GetInstance("Render")
+	vulkan_core := dieselvk.NewBaseCore(config, "default", 5, 5, window)
+	vulkan_core.CreateGraphicsInstance("default")
+	vk_instance := vulkan_core.GetInstance("default")
 
 	for !window.ShouldClose() {
 		vk_instance.Update(0.0)
 		glfw.PollEvents()
 	}
+
+	vulkan_core.Release()
 
 }
